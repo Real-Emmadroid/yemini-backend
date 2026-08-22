@@ -1,0 +1,6 @@
+{
+  "name": "Device Registration & GitHub OAuth Backend",
+  "description": "Standalone Node.js/Express backend connecting to Neon Postgres for device registration, user linking, and GitHub OAuth token exchange.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
