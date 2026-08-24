@@ -1,21 +1,31 @@
-import React, { useState } from 'react';
-import { ApiResponse } from '../types';
+import React, { useState, useEffect } from 'react';
+import { ApiResponse, User } from '../types';
 
 interface LinkUserPanelProps {
+  authToken: string;
+  currentUser: User | null;
   onSuccess: () => void;
 }
 
-export const LinkUserPanel: React.FC<LinkUserPanelProps> = ({ onSuccess }) => {
+export const LinkUserPanel: React.FC<LinkUserPanelProps> = ({
+  authToken,
+  currentUser,
+  onSuccess,
+}) => {
   const [deviceId, setDeviceId] = useState(
     '8f3b21c4-729d-4e92-9388-c4491763a890'
   );
-  const [userId, setUserId] = useState('42');
+  const [tokenInput, setTokenInput] = useState(authToken);
 
   const [loading, setLoading] = useState(false);
   const [response, setResponse] = useState<ApiResponse | null>(null);
   const [httpStatus, setHttpStatus] = useState<number | null>(null);
   const [latency, setLatency] = useState<number | null>(null);
   const [activeCodeTab, setActiveCodeTab] = useState<'curl' | 'kotlin' | 'fetch'>('curl');
+
+  useEffect(() => {
+    setTokenInput(authToken);
+  }, [authToken]);
 
   const handleLink = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -27,10 +37,12 @@ export const LinkUserPanel: React.FC<LinkUserPanelProps> = ({ onSuccess }) => {
     try {
       const res = await fetch('/api/devices/link-user', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${tokenInput}`,
+        },
         body: JSON.stringify({
           device_id: deviceId.trim(),
-          user_id: userId.trim() === '' ? null : parseInt(userId.trim(), 10),
         }),
       });
 
@@ -52,24 +64,26 @@ export const LinkUserPanel: React.FC<LinkUserPanelProps> = ({ onSuccess }) => {
 
   const curlSnippet = `curl -X POST "${window.location.origin}/api/devices/link-user" \\
   -H "Content-Type: application/json" \\
+  -H "Authorization: Bearer ${tokenInput || 'YOUR_JWT_TOKEN'}" \\
   -d '{
-    "device_id": "${deviceId}",
-    "user_id": ${userId ? userId : 'null'}
+    "device_id": "${deviceId}"
   }'`;
 
   const kotlinSnippet = `// Android Kotlin / Retrofit
 val payload = LinkUserRequest(
-    deviceId = "${deviceId}",
-    userId = ${userId ? userId : 'null'}
+    deviceId = "${deviceId}"
 )
-apiService.linkUser(payload)`;
+// Interceptor automatically attaches Header "Authorization: Bearer \${token}"
+apiService.linkUser(token = "Bearer $tokenInput", payload)`;
 
   const fetchSnippet = `await fetch('/api/devices/link-user', {
   method: 'POST',
-  headers: { 'Content-Type': 'application/json' },
+  headers: {
+    'Content-Type': 'application/json',
+    'Authorization': 'Bearer ${tokenInput || 'YOUR_JWT_TOKEN'}'
+  },
   body: JSON.stringify({
-    device_id: '${deviceId}',
-    user_id: ${userId ? userId : 'null'}
+    device_id: '${deviceId}'
   })
 });`;
 
@@ -78,7 +92,7 @@ apiService.linkUser(payload)`;
       id="panel-device-link-user"
       className="bg-white border border-slate-200 rounded-lg p-6 shadow-sm"
     >
-      <div className="flex items-center justify-between pb-4 border-b border-slate-100">
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between pb-4 border-b border-slate-100 gap-3">
         <div>
           <div className="flex items-center gap-2">
             <span className="px-2 py-0.5 rounded text-xs font-mono font-bold bg-purple-100 text-purple-800">
@@ -87,14 +101,45 @@ apiService.linkUser(payload)`;
             <span className="font-mono text-sm font-semibold text-slate-800">
               /api/devices/link-user
             </span>
+            <span className="text-xs px-2 py-0.5 rounded-full bg-amber-50 text-amber-700 font-medium border border-amber-200">
+              JWT Protected
+            </span>
           </div>
           <p className="text-xs text-slate-500 mt-1">
-            Updates the matching device row's <code className="font-mono text-slate-700">user_id</code> and refreshes <code className="font-mono text-slate-700">last_seen_at</code>.
+            Updates matching device row with authenticated <code className="font-mono text-slate-700">req.userId</code> and refreshes <code className="font-mono text-slate-700">last_seen_at</code>.
           </p>
         </div>
+
+        {currentUser && (
+          <div className="text-xs px-3 py-1.5 rounded bg-emerald-50 text-emerald-800 border border-emerald-200 flex items-center gap-2">
+            <span className="w-2 h-2 rounded-full bg-emerald-600" />
+            <span>Authenticated User: <strong>ID #{currentUser.id}</strong> ({currentUser.email})</span>
+          </div>
+        )}
       </div>
 
-      <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 mt-5">
+      {/* Token Header Banner */}
+      <div className="bg-slate-50 border border-slate-200 rounded-md p-3 my-4 space-y-1.5">
+        <div className="flex items-center justify-between">
+          <label htmlFor="input-link-jwt" className="text-xs font-semibold text-slate-700 font-mono flex items-center gap-1.5">
+            <span className="w-1.5 h-1.5 rounded-full bg-blue-500" />
+            Authorization: Bearer &lt;token&gt;
+          </label>
+          <span className="text-[11px] text-slate-500">
+            {tokenInput ? 'JWT attached' : 'No token (will return 401 Unauthorized)'}
+          </span>
+        </div>
+        <input
+          id="input-link-jwt"
+          type="text"
+          value={tokenInput}
+          onChange={(e) => setTokenInput(e.target.value)}
+          placeholder="Paste or enter signed JWT token"
+          className="w-full text-xs font-mono px-3 py-1.5 border border-slate-300 rounded focus:ring-1 focus:ring-slate-900 bg-white"
+        />
+      </div>
+
+      <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 mt-2">
         {/* Form Column */}
         <form onSubmit={handleLink} className="lg:col-span-6 space-y-4">
           <div>
@@ -113,25 +158,8 @@ apiService.linkUser(payload)`;
               placeholder="e.g. 8f3b21c4-729d-4e92-9388-c4491763a890"
               className="w-full text-xs font-mono px-3 py-2 border border-slate-300 rounded focus:outline-none focus:ring-1 focus:ring-purple-500 bg-slate-50 text-slate-900"
             />
-          </div>
-
-          <div>
-            <label
-              htmlFor="input-link-user-id"
-              className="text-xs font-semibold text-slate-700 font-mono block mb-1"
-            >
-              user_id (Integer or leave blank for null)
-            </label>
-            <input
-              id="input-link-user-id"
-              type="number"
-              value={userId}
-              onChange={(e) => setUserId(e.target.value)}
-              placeholder="e.g. 42"
-              className="w-full text-xs font-mono px-3 py-2 border border-slate-300 rounded focus:outline-none focus:ring-1 focus:ring-purple-500 bg-slate-50 text-slate-900"
-            />
             <p className="text-[11px] text-slate-500 mt-1">
-              Associate this device registration with an authenticated backend user account ID.
+              The device ID registered via <code>/api/devices/register</code>. The user ID will be extracted safely from your JWT token.
             </p>
           </div>
 
@@ -139,10 +167,17 @@ apiService.linkUser(payload)`;
             <button
               id="btn-submit-link-user"
               type="submit"
-              disabled={loading}
-              className="w-full py-2.5 px-4 bg-slate-900 hover:bg-slate-800 text-white rounded text-xs font-medium tracking-wide transition-colors disabled:opacity-50 cursor-pointer"
+              disabled={loading || !tokenInput}
+              className="w-full py-2.5 px-4 bg-slate-900 hover:bg-slate-800 text-white rounded text-xs font-semibold tracking-wide transition-colors disabled:opacity-50 cursor-pointer flex items-center justify-center gap-2"
             >
-              {loading ? 'Linking User...' : 'Send POST /api/devices/link-user'}
+              {loading ? (
+                <>
+                  <span className="w-3 h-3 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                  Linking Device to req.userId...
+                </>
+              ) : (
+                'Link Device to Authenticated User (POST)'
+              )}
             </button>
           </div>
 
@@ -211,7 +246,7 @@ apiService.linkUser(payload)`;
               </pre>
             ) : (
               <div className="h-full flex items-center justify-center text-slate-600 text-center py-10">
-                Click "Send POST /api/devices/link-user" to test updating the user_id for a registered device.
+                Click "Link Device to Authenticated User" to link this device ID to the authenticated user ID.
               </div>
             )}
           </div>

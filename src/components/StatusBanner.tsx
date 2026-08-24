@@ -14,6 +14,7 @@ export const StatusBanner: React.FC<StatusBannerProps> = ({
 }) => {
   const isHealthy = health?.status === 'ok';
   const isDbConnected = Boolean(health?.database?.connected);
+  const isJwtConfigured = Boolean(health?.env?.jwt_configured);
   const isGithubConfigured = Boolean(health?.env?.github_configured);
 
   return (
@@ -37,7 +38,7 @@ export const StatusBanner: React.FC<StatusBannerProps> = ({
             </span>
           </div>
           <p className="text-sm text-slate-400 mt-1">
-            Neon Postgres Device Registry & GitHub OAuth Token Exchange Service
+            Bcrypt Hashing • JWT Auth Middleware • Neon PostgreSQL Device Registry & Projects
           </p>
         </div>
 
@@ -53,7 +54,7 @@ export const StatusBanner: React.FC<StatusBannerProps> = ({
         </div>
       </div>
 
-      <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 mt-4 pt-4 border-t border-slate-800/80">
+      <div className="grid grid-cols-1 sm:grid-cols-4 gap-3 mt-4 pt-4 border-t border-slate-800/80">
         <div
           id="stat-api-status"
           className="bg-slate-950/60 p-3 rounded border border-slate-800"
@@ -68,25 +69,45 @@ export const StatusBanner: React.FC<StatusBannerProps> = ({
         </div>
 
         <div
+          id="stat-jwt-status"
+          className="bg-slate-950/60 p-3 rounded border border-slate-800"
+        >
+          <span className="text-xs text-slate-400 font-mono block">
+            JWT Auth Security
+          </span>
+          <span
+            className={`text-sm font-medium flex items-center gap-1.5 mt-0.5 ${
+              isJwtConfigured ? 'text-emerald-400' : 'text-amber-400'
+            }`}
+          >
+            <span
+              className={`w-1.5 h-1.5 rounded-full ${
+                isJwtConfigured ? 'bg-emerald-500' : 'bg-amber-500'
+              }`}
+            />
+            {isJwtConfigured ? 'JWT_SECRET Active' : 'Dev Key Active'}
+          </span>
+        </div>
+
+        <div
           id="stat-db-status"
           className="bg-slate-950/60 p-3 rounded border border-slate-800"
         >
           <span className="text-xs text-slate-400 font-mono block">
             Neon PostgreSQL
           </span>
-          {isDbConnected ? (
-            <span className="text-sm font-medium text-emerald-400 flex items-center gap-1.5 mt-0.5">
-              <span className="w-1.5 h-1.5 rounded-full bg-emerald-500" />
-              Connected & Schema Ready
-            </span>
-          ) : (
-            <span className="text-sm font-medium text-amber-400 flex items-center gap-1.5 mt-0.5">
-              <span className="w-1.5 h-1.5 rounded-full bg-amber-500" />
-              {health?.database?.configured
-                ? 'Connecting...'
-                : 'DATABASE_URL Pending'}
-            </span>
-          )}
+          <span
+            className={`text-sm font-medium flex items-center gap-1.5 mt-0.5 ${
+              isDbConnected ? 'text-emerald-400' : 'text-amber-400'
+            }`}
+          >
+            <span
+              className={`w-1.5 h-1.5 rounded-full ${
+                isDbConnected ? 'bg-emerald-500' : 'bg-amber-500'
+              }`}
+            />
+            {isDbConnected ? 'Connected & Migrated' : 'Memory Mode Active'}
+          </span>
         </div>
 
         <div
@@ -94,32 +115,22 @@ export const StatusBanner: React.FC<StatusBannerProps> = ({
           className="bg-slate-950/60 p-3 rounded border border-slate-800"
         >
           <span className="text-xs text-slate-400 font-mono block">
-            GitHub OAuth App
+            GitHub OAuth
           </span>
-          {isGithubConfigured ? (
-            <span className="text-sm font-medium text-emerald-400 flex items-center gap-1.5 mt-0.5">
-              <span className="w-1.5 h-1.5 rounded-full bg-emerald-500" />
-              Credentials Configured
-            </span>
-          ) : (
-            <span className="text-sm font-medium text-slate-400 flex items-center gap-1.5 mt-0.5">
-              <span className="w-1.5 h-1.5 rounded-full bg-slate-500" />
-              Awaiting CLIENT_ID/SECRET
-            </span>
-          )}
+          <span
+            className={`text-sm font-medium flex items-center gap-1.5 mt-0.5 ${
+              isGithubConfigured ? 'text-emerald-400' : 'text-slate-400'
+            }`}
+          >
+            <span
+              className={`w-1.5 h-1.5 rounded-full ${
+                isGithubConfigured ? 'bg-emerald-500' : 'bg-slate-600'
+              }`}
+            />
+            {isGithubConfigured ? 'Credentials Set' : 'Optional'}
+          </span>
         </div>
       </div>
-
-      {!isDbConnected && (
-        <div className="mt-3 p-2.5 rounded bg-amber-950/40 border border-amber-900/60 text-xs text-amber-300">
-          <span className="font-semibold">Notice:</span> Database is currently
-          unconnected. When running on Render or locally, supply{' '}
-          <code className="bg-slate-900 px-1 py-0.5 rounded text-amber-200">
-            DATABASE_URL
-          </code>{' '}
-          in your environment variables to connect to your Neon instance.
-        </div>
-      )}
     </div>
   );
 };

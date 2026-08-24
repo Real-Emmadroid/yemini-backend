@@ -68,7 +68,7 @@ export async function checkDbConnection(): Promise<{ connected: boolean; error?:
 export async function initDatabase(): Promise<{ success: boolean; error?: string }> {
   const dbPool = getPool();
   if (!dbPool) {
-    console.warn('⚠️ DATABASE_URL is not configured yet. Database table initialization skipped.');
+    console.warn('⚠️ DATABASE_URL is not configured yet. Running in memory fallback mode.');
     return {
       success: false,
       error: 'DATABASE_URL is not configured. Set DATABASE_URL in .env to connect to Neon PostgreSQL.',
@@ -76,30 +76,53 @@ export async function initDatabase(): Promise<{ success: boolean; error?: string
   }
 
   try {
-    const createTableQuery = `
+    const createTablesQuery = `
+      -- Users table for authentication
+      CREATE TABLE IF NOT EXISTS users (
+          id SERIAL PRIMARY KEY,
+          email TEXT NOT NULL UNIQUE,
+          password_hash TEXT NOT NULL,
+          name TEXT NULL,
+          created_at TIMESTAMPTZ DEFAULT now(),
+          updated_at TIMESTAMPTZ DEFAULT now()
+      );
+
+      -- Device registrations
       CREATE TABLE IF NOT EXISTS device_registrations (
           id SERIAL PRIMARY KEY,
           device_id UUID NOT NULL UNIQUE,
           fcm_token TEXT NOT NULL,
-          user_id INTEGER NULL,
+          user_id INTEGER NULL REFERENCES users(id) ON DELETE SET NULL,
           platform TEXT DEFAULT 'android',
           app_version TEXT,
           installed_at TIMESTAMPTZ DEFAULT now(),
           last_seen_at TIMESTAMPTZ DEFAULT now()
       );
+
+      -- User projects
+      CREATE TABLE IF NOT EXISTS projects (
+          id SERIAL PRIMARY KEY,
+          user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+          project_id TEXT NOT NULL,
+          name TEXT NOT NULL,
+          data JSONB NULL,
+          created_at TIMESTAMPTZ DEFAULT now(),
+          updated_at TIMESTAMPTZ DEFAULT now(),
+          CONSTRAINT uq_user_project UNIQUE (user_id, project_id)
+      );
     `;
 
     const client = await dbPool.connect();
     try {
-      await client.query(createTableQuery);
+      await client.query(createTablesQuery);
       isInitialized = true;
-      console.log('✅ PostgreSQL: "device_registrations" table verified/created successfully.');
+      console.log('✅ PostgreSQL: "users", "device_registrations", and "projects" tables verified/created successfully.');
       return { success: true };
     } finally {
       client.release();
     }
   } catch (err: any) {
-    console.error('❌ Failed to initialize "device_registrations" table:', err.message);
+    console.error('❌ Failed to initialize database tables:', err.message);
     return {
       success: false,
       error: err.message,

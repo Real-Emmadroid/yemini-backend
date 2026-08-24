@@ -1,3 +1,29 @@
+export interface User {
+  id: number;
+  email: string;
+  name: string | null;
+  created_at: string;
+  updated_at?: string;
+}
+
+export interface AuthResponse {
+  success: boolean;
+  message?: string;
+  user: User;
+  token: string;
+  error?: string;
+}
+
+export interface Project {
+  id: number;
+  user_id: number;
+  project_id: string;
+  name: string;
+  data: any;
+  created_at: string;
+  updated_at: string;
+}
+
 export interface DeviceRegistration {
   id: number;
   device_id: string;
@@ -19,6 +45,7 @@ export interface HealthResponse {
     error?: string;
   };
   env: {
+    jwt_configured?: boolean;
     github_configured: boolean;
     port: number;
   };
@@ -33,7 +60,13 @@ export interface RegisterDevicePayload {
 
 export interface LinkUserPayload {
   device_id: string;
-  user_id: number | null;
+  user_id?: number | null;
+}
+
+export interface SaveProjectPayload {
+  project_id: string;
+  name: string;
+  data?: any;
 }
 
 export interface ExchangeTokenPayload {
@@ -45,8 +78,12 @@ export interface ApiResponse<T = any> {
   message?: string;
   error?: string;
   data?: T;
+  user?: User;
+  token?: string;
   device?: DeviceRegistration;
   devices?: DeviceRegistration[];
+  project?: Project;
+  projects?: Project[];
   access_token?: string;
   token_type?: string;
   scope?: string;
