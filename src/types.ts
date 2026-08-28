@@ -2,6 +2,8 @@ export interface User {
   id: number;
   email: string;
   name: string | null;
+  github_connected?: boolean;
+  github_connected_at?: string | null;
   created_at: string;
   updated_at?: string;
 }
@@ -47,6 +49,7 @@ export interface HealthResponse {
   env: {
     jwt_configured?: boolean;
     github_configured: boolean;
+    admin_emails_configured?: boolean;
     port: number;
   };
 }
@@ -73,8 +76,37 @@ export interface ExchangeTokenPayload {
   code: string;
 }
 
+export interface LanguageEventPayload {
+  device_id: string;
+  language: string;
+  action?: string;
+}
+
+export interface ExtensionInstallPayload {
+  device_id: string;
+  extension_id: string;
+  extension_name?: string;
+}
+
+export interface AdminDashboardData {
+  success: boolean;
+  storage: 'neon_postgres' | 'memory_fallback';
+  generated_at: string;
+  totals: {
+    total_users: number;
+    cloud_signed_in_users: number;
+    total_installs: number;
+    github_connected_users: number;
+    active_now: number;
+    active_24h: number;
+  };
+  top_languages: Array<{ language: string; count: number }>;
+  top_extensions: Array<{ extension_id: string; extension_name: string | null; count: number }>;
+}
+
 export interface ApiResponse<T = any> {
   success?: boolean;
+  storage?: 'neon_postgres' | 'memory_fallback';
   message?: string;
   error?: string;
   data?: T;

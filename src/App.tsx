@@ -7,11 +7,12 @@ import { DeviceRegisterPanel } from './components/DeviceRegisterPanel';
 import { LinkUserPanel } from './components/LinkUserPanel';
 import { GithubExchangePanel } from './components/GithubExchangePanel';
 import { DatabaseTablePanel } from './components/DatabaseTablePanel';
+import { AdminDashboardPanel } from './components/AdminDashboardPanel';
 import { DocsPanel } from './components/DocsPanel';
 
 export default function App() {
   const [activeTab, setActiveTab] = useState<
-    'auth' | 'projects' | 'register-device' | 'link-user' | 'github' | 'records' | 'docs'
+    'auth' | 'admin' | 'projects' | 'register-device' | 'link-user' | 'github' | 'records' | 'docs'
   >('auth');
   const [health, setHealth] = useState<HealthResponse | null>(null);
   const [healthLoading, setHealthLoading] = useState<boolean>(true);
@@ -109,6 +110,19 @@ export default function App() {
           </button>
 
           <button
+            id="tab-btn-admin"
+            onClick={() => setActiveTab('admin')}
+            className={`px-3.5 py-2 rounded text-xs font-semibold tracking-wide transition-all cursor-pointer flex items-center gap-1.5 ${
+              activeTab === 'admin'
+                ? 'bg-slate-900 text-white shadow-sm'
+                : 'text-slate-600 hover:text-slate-900 hover:bg-slate-50'
+            }`}
+          >
+            <span className="w-1.5 h-1.5 rounded-full bg-purple-400" />
+            2. Admin & Analytics
+          </button>
+
+          <button
             id="tab-btn-projects"
             onClick={() => setActiveTab('projects')}
             className={`px-3.5 py-2 rounded text-xs font-semibold tracking-wide transition-all cursor-pointer flex items-center gap-1.5 ${
@@ -118,7 +132,7 @@ export default function App() {
             }`}
           >
             <span className="w-1.5 h-1.5 rounded-full bg-amber-400" />
-            2. Projects (req.userId)
+            3. Projects (req.userId)
           </button>
 
           <button
@@ -130,7 +144,7 @@ export default function App() {
                 : 'text-slate-600 hover:text-slate-900 hover:bg-slate-50'
             }`}
           >
-            3. Register Device
+            4. Register Device
           </button>
 
           <button
@@ -142,7 +156,7 @@ export default function App() {
                 : 'text-slate-600 hover:text-slate-900 hover:bg-slate-50'
             }`}
           >
-            4. Link User (JWT)
+            5. Link User (JWT)
           </button>
 
           <button
@@ -198,6 +212,13 @@ export default function App() {
             currentUser={currentUser}
             onAuthSuccess={handleAuthSuccess}
             onLogout={handleLogout}
+          />
+        )}
+
+        {activeTab === 'admin' && (
+          <AdminDashboardPanel
+            authToken={authToken}
+            currentUser={currentUser}
           />
         )}
 

@@ -16,6 +16,8 @@ interface MemoryUser {
   email: string;
   password_hash: string;
   name: string | null;
+  github_connected?: boolean;
+  github_connected_at?: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -41,6 +43,24 @@ interface MemoryDevice {
   last_seen_at: string;
 }
 
+interface MemoryLanguageEvent {
+  id: number;
+  device_id: string;
+  user_id: number | null;
+  language: string;
+  action: string;
+  created_at: string;
+}
+
+interface MemoryExtensionEvent {
+  id: number;
+  device_id: string;
+  user_id: number | null;
+  extension_id: string;
+  extension_name: string | null;
+  created_at: string;
+}
+
 const memoryUsers: MemoryUser[] = [];
 let nextUserId = 1;
 
@@ -60,6 +80,12 @@ const memoryDevices: MemoryDevice[] = [
   },
 ];
 let nextDeviceId = 2;
+
+const memoryLanguageEvents: MemoryLanguageEvent[] = [];
+let nextLangEventId = 1;
+
+const memoryExtensionEvents: MemoryExtensionEvent[] = [];
+let nextExtEventId = 1;
 
 const UUID_REGEX = /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-5][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$/;
 const LOOSE_UUID_REGEX = /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/;
@@ -131,6 +157,42 @@ export function authenticateToken(
   }
 }
 
+// Soft/Optional Authentication Middleware
+export function optionalAuth(req: AuthenticatedRequest, res: Response, next: NextFunction): void {
+  const authHeader = req.headers['authorization'];
+  const token = authHeader && typeof authHeader === 'string' && authHeader.startsWith('Bearer ')
+    ? authHeader.slice(7).trim() : null;
+  if (!token) { next(); return; }
+  try {
+    const decoded = jwt.verify(token, getJwtSecret()) as { user_id?: number | string };
+    if (decoded && decoded.user_id !== undefined && decoded.user_id !== null) {
+      req.userId = Number(decoded.user_id);
+    }
+  } catch {
+    // ignore invalid/expired token here — this route doesn't require auth
+  }
+  next();
+}
+
+// Admin-check Helper (looks up email for authenticated userId and compares against ADMIN_EMAILS)
+async function isAdminUser(userId: number): Promise<boolean> {
+  const adminEmails = (process.env.ADMIN_EMAILS || '')
+    .split(',').map(e => e.trim().toLowerCase()).filter(Boolean);
+  if (adminEmails.length === 0) return false;
+  if (getPool()) {
+    try {
+      const result = await query('SELECT email FROM users WHERE id = $1', [userId]);
+      if (result.rows.length > 0) {
+        return adminEmails.includes(String(result.rows[0].email).toLowerCase());
+      }
+    } catch (e: any) {
+      console.warn('isAdminUser DB check failed:', e.message);
+    }
+  }
+  const memUser = memoryUsers.find(u => u.id === userId);
+  return memUser ? adminEmails.includes(memUser.email.toLowerCase()) : false;
+}
+
 // ==========================================
 // Public Health Endpoint
 // ==========================================
@@ -146,6 +208,9 @@ export async function handleHealthCheck(req: Request, res: Response) {
       process.env.JWT_SECRET &&
       !process.env.JWT_SECRET.includes('generate-a-long-random-string')
     );
+    const adminEmailsConfigured = Boolean(
+      process.env.ADMIN_EMAILS && process.env.ADMIN_EMAILS.trim() !== ''
+    );
 
     res.status(200).json({
       status: 'ok',
@@ -159,6 +224,7 @@ export async function handleHealthCheck(req: Request, res: Response) {
       env: {
         jwt_configured: hasJwtSecret,
         github_configured: hasGithub,
+        admin_emails_configured: adminEmailsConfigured,
         port: process.env.PORT ? parseInt(process.env.PORT, 10) : 3000,
       },
     });
@@ -175,6 +241,7 @@ export async function handleHealthCheck(req: Request, res: Response) {
       env: {
         jwt_configured: false,
         github_configured: false,
+        admin_emails_configured: false,
         port: process.env.PORT ? parseInt(process.env.PORT, 10) : 3000,
       },
     });
@@ -228,7 +295,7 @@ router.post('/auth/register', async (req: Request, res: Response, next: NextFunc
         const insertQuery = `
           INSERT INTO users (email, password_hash, name, created_at, updated_at)
           VALUES ($1, $2, $3, NOW(), NOW())
-          RETURNING id, email, name, created_at, updated_at;
+          RETURNING id, email, name, github_connected, github_connected_at, created_at, updated_at;
         `;
         const result = await query(insertQuery, [cleanEmail, passwordHash, cleanName]);
         const user = result.rows[0];
@@ -269,6 +336,8 @@ router.post('/auth/register', async (req: Request, res: Response, next: NextFunc
       email: cleanEmail,
       password_hash: passwordHash,
       name: cleanName,
+      github_connected: false,
+      github_connected_at: null,
       created_at: now,
       updated_at: now,
     };
@@ -307,11 +376,11 @@ router.post('/auth/login', async (req: Request, res: Response, next: NextFunctio
 
     const cleanEmail = email.trim().toLowerCase();
 
-    let userRecord: { id: number; email: string; password_hash: string; name: string | null; created_at: any; updated_at?: any } | null = null;
+    let userRecord: { id: number; email: string; password_hash: string; name: string | null; github_connected?: boolean; github_connected_at?: any; created_at: any; updated_at?: any } | null = null;
 
     if (getPool()) {
       try {
-        const queryRes = await query('SELECT id, email, password_hash, name, created_at, updated_at FROM users WHERE email = $1', [cleanEmail]);
+        const queryRes = await query('SELECT id, email, password_hash, name, github_connected, github_connected_at, created_at, updated_at FROM users WHERE email = $1', [cleanEmail]);
         if (queryRes.rows.length > 0) {
           userRecord = queryRes.rows[0];
         }
@@ -349,6 +418,8 @@ router.post('/auth/login', async (req: Request, res: Response, next: NextFunctio
       id: userRecord.id,
       email: userRecord.email,
       name: userRecord.name,
+      github_connected: Boolean(userRecord.github_connected),
+      github_connected_at: userRecord.github_connected_at || null,
       created_at: userRecord.created_at,
     };
 
@@ -374,7 +445,7 @@ router.get('/auth/me', authenticateToken, async (req: AuthenticatedRequest, res:
     if (getPool()) {
       try {
         const result = await query(
-          'SELECT id, email, name, created_at, updated_at FROM users WHERE id = $1',
+          'SELECT id, email, name, github_connected, github_connected_at, created_at, updated_at FROM users WHERE id = $1',
           [userId]
         );
         if (result.rows.length > 0) {
@@ -990,6 +1061,190 @@ router.post('/github/exchange-token', async (req: Request, res: Response, next: 
     res.status(500).json({
       error: error.message || 'Internal server error during GitHub token exchange',
     });
+  }
+});
+
+// ==========================================
+// Analytics Tracking & GitHub Status Routes
+// ==========================================
+
+// POST /api/analytics/language-event
+// Body: { device_id, language, action? }  action defaults to 'open'
+router.post('/analytics/language-event', optionalAuth, async (req: AuthenticatedRequest, res: Response): Promise<void> => {
+  try {
+    const { device_id, language, action } = req.body || {};
+    if (!device_id || typeof device_id !== 'string' || !isValidUuid(device_id.trim())) {
+      res.status(400).json({ error: 'Missing or invalid "device_id" (UUID required)' });
+      return;
+    }
+    if (!language || typeof language !== 'string' || language.trim() === '') {
+      res.status(400).json({ error: 'Missing required field: "language"' });
+      return;
+    }
+    const cleanLang = language.trim().toLowerCase();
+    const cleanAction = typeof action === 'string' && action.trim() !== '' ? action.trim() : 'open';
+    const userId = req.userId ?? null;
+
+    if (getPool()) {
+      try {
+        await query(
+          'INSERT INTO language_events (device_id, user_id, language, action) VALUES ($1, $2, $3, $4)',
+          [device_id.trim(), userId, cleanLang, cleanAction]
+        );
+        res.status(200).json({ success: true, storage: 'neon_postgres' });
+        return;
+      } catch (dbErr: any) {
+        console.warn('Postgres insert language_events failed, using memory:', dbErr.message);
+      }
+    }
+    memoryLanguageEvents.push({
+      id: nextLangEventId++, device_id: device_id.trim(), user_id: userId,
+      language: cleanLang, action: cleanAction, created_at: new Date().toISOString(),
+    });
+    res.status(200).json({ success: true, storage: 'memory_fallback' });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message || 'Failed to log language event' });
+  }
+});
+
+// POST /api/analytics/extension-install
+// Body: { device_id, extension_id, extension_name? }
+router.post('/analytics/extension-install', optionalAuth, async (req: AuthenticatedRequest, res: Response): Promise<void> => {
+  try {
+    const { device_id, extension_id, extension_name } = req.body || {};
+    if (!device_id || typeof device_id !== 'string' || !isValidUuid(device_id.trim())) {
+      res.status(400).json({ error: 'Missing or invalid "device_id" (UUID required)' });
+      return;
+    }
+    if (!extension_id || typeof extension_id !== 'string' || extension_id.trim() === '') {
+      res.status(400).json({ error: 'Missing required field: "extension_id"' });
+      return;
+    }
+    const cleanExtId = extension_id.trim();
+    const cleanExtName = typeof extension_name === 'string' && extension_name.trim() !== '' ? extension_name.trim() : null;
+    const userId = req.userId ?? null;
+
+    if (getPool()) {
+      try {
+        await query(
+          'INSERT INTO extension_install_events (device_id, user_id, extension_id, extension_name) VALUES ($1, $2, $3, $4)',
+          [device_id.trim(), userId, cleanExtId, cleanExtName]
+        );
+        res.status(200).json({ success: true, storage: 'neon_postgres' });
+        return;
+      } catch (dbErr: any) {
+        console.warn('Postgres insert extension_install_events failed, using memory:', dbErr.message);
+      }
+    }
+    memoryExtensionEvents.push({
+      id: nextExtEventId++, device_id: device_id.trim(), user_id: userId,
+      extension_id: cleanExtId, extension_name: cleanExtName, created_at: new Date().toISOString(),
+    });
+    res.status(200).json({ success: true, storage: 'memory_fallback' });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message || 'Failed to log extension install event' });
+  }
+});
+
+// POST /api/github/mark-connected (Protected)
+// Called by the app right after a successful GitHub token exchange + use.
+router.post('/github/mark-connected', authenticateToken, async (req: AuthenticatedRequest, res: Response): Promise<void> => {
+  try {
+    const authenticatedUserId = req.userId!;
+    if (getPool()) {
+      try {
+        await query(
+          'UPDATE users SET github_connected = TRUE, github_connected_at = NOW() WHERE id = $1',
+          [authenticatedUserId]
+        );
+        res.status(200).json({ success: true, storage: 'neon_postgres' });
+        return;
+      } catch (dbErr: any) {
+        console.warn('Postgres update github_connected failed, using memory:', dbErr.message);
+      }
+    }
+    const memUser = memoryUsers.find(u => u.id === authenticatedUserId);
+    if (memUser) {
+      memUser.github_connected = true;
+      memUser.github_connected_at = new Date().toISOString();
+    }
+    res.status(200).json({ success: true, storage: 'memory_fallback' });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message || 'Failed to mark GitHub connected' });
+  }
+});
+
+// GET /api/admin/dashboard (Protected + admin-only)
+router.get('/admin/dashboard', authenticateToken, async (req: AuthenticatedRequest, res: Response): Promise<void> => {
+  try {
+    const authenticatedUserId = req.userId!;
+    if (!(await isAdminUser(authenticatedUserId))) {
+      res.status(403).json({ error: 'Forbidden: this account is not in ADMIN_EMAILS' });
+      return;
+    }
+
+    if (getPool()) {
+      try {
+        const [totalUsers, totalInstalls, githubConnected, activeNow, active24h, topLangs, topExts] = await Promise.all([
+          query('SELECT COUNT(*)::int AS c FROM users'),
+          query('SELECT COUNT(*)::int AS c FROM device_registrations'),
+          query('SELECT COUNT(*)::int AS c FROM users WHERE github_connected = TRUE'),
+          query("SELECT COUNT(*)::int AS c FROM device_registrations WHERE last_seen_at > NOW() - INTERVAL '5 minutes'"),
+          query("SELECT COUNT(*)::int AS c FROM device_registrations WHERE last_seen_at > NOW() - INTERVAL '24 hours'"),
+          query('SELECT language, COUNT(*)::int AS count FROM language_events GROUP BY language ORDER BY count DESC LIMIT 10'),
+          query('SELECT extension_id, MAX(extension_name) AS extension_name, COUNT(*)::int AS count FROM extension_install_events GROUP BY extension_id ORDER BY count DESC LIMIT 10'),
+        ]);
+
+        res.status(200).json({
+          success: true,
+          storage: 'neon_postgres',
+          generated_at: new Date().toISOString(),
+          totals: {
+            total_users: totalUsers.rows[0].c,
+            cloud_signed_in_users: totalUsers.rows[0].c,
+            total_installs: totalInstalls.rows[0].c,
+            github_connected_users: githubConnected.rows[0].c,
+            active_now: activeNow.rows[0].c,
+            active_24h: active24h.rows[0].c,
+          },
+          top_languages: topLangs.rows,
+          top_extensions: topExts.rows,
+        });
+        return;
+      } catch (dbErr: any) {
+        console.warn('Postgres admin dashboard query failed, using memory:', dbErr.message);
+      }
+    }
+
+    // Memory fallback
+    const now = Date.now();
+    const activeNowCount = memoryDevices.filter(d => now - new Date(d.last_seen_at).getTime() < 5 * 60 * 1000).length;
+    const active24hCount = memoryDevices.filter(d => now - new Date(d.last_seen_at).getTime() < 24 * 60 * 60 * 1000).length;
+    const langCounts: Record<string, number> = {};
+    memoryLanguageEvents.forEach(e => { langCounts[e.language] = (langCounts[e.language] || 0) + 1; });
+    const extCounts: Record<string, { name: string | null; count: number }> = {};
+    memoryExtensionEvents.forEach(e => {
+      if (!extCounts[e.extension_id]) extCounts[e.extension_id] = { name: e.extension_name, count: 0 };
+      extCounts[e.extension_id].count++;
+    });
+
+    res.status(200).json({
+      success: true,
+      storage: 'memory_fallback',
+      generated_at: new Date().toISOString(),
+      totals: {
+        total_users: memoryUsers.length,
+        cloud_signed_in_users: memoryUsers.length,
+        total_installs: memoryDevices.length,
+        github_connected_users: memoryUsers.filter(u => u.github_connected).length,
+        active_now: activeNowCount,
+        active_24h: active24hCount,
+      },
+      top_languages: Object.entries(langCounts).map(([language, count]) => ({ language, count })).sort((a, b) => b.count - a.count).slice(0, 10),
+      top_extensions: Object.entries(extCounts).map(([extension_id, v]) => ({ extension_id, extension_name: v.name, count: v.count })).sort((a, b) => b.count - a.count).slice(0, 10),
+    });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message || 'Failed to build admin dashboard' });
   }
 });
 

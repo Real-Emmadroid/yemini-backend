@@ -9,12 +9,14 @@ export const DocsPanel: React.FC = () => {
     setTimeout(() => setCopiedSection(null), 2000);
   };
 
-  const sqlSchema = `-- 1. Users Table (Bcrypt Hashed Passwords)
+  const sqlSchema = `-- 1. Users Table (Bcrypt Hashed Passwords & GitHub Status)
 CREATE TABLE IF NOT EXISTS users (
     id SERIAL PRIMARY KEY,
     email TEXT NOT NULL UNIQUE,
     password_hash TEXT NOT NULL,
     name TEXT NULL,
+    github_connected BOOLEAN NOT NULL DEFAULT FALSE,
+    github_connected_at TIMESTAMPTZ NULL,
     created_at TIMESTAMPTZ DEFAULT now(),
     updated_at TIMESTAMPTZ DEFAULT now()
 );
@@ -41,13 +43,39 @@ CREATE TABLE IF NOT EXISTS projects (
     created_at TIMESTAMPTZ DEFAULT now(),
     updated_at TIMESTAMPTZ DEFAULT now(),
     CONSTRAINT uq_user_project UNIQUE (user_id, project_id)
-);`;
+);
+
+-- 4. Analytics: Language Events
+CREATE TABLE IF NOT EXISTS language_events (
+    id SERIAL PRIMARY KEY,
+    device_id UUID NOT NULL,
+    user_id INTEGER NULL REFERENCES users(id) ON DELETE SET NULL,
+    language TEXT NOT NULL,
+    action TEXT NOT NULL DEFAULT 'open',
+    created_at TIMESTAMPTZ DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_language_events_language ON language_events(language);
+CREATE INDEX IF NOT EXISTS idx_language_events_created_at ON language_events(created_at);
+
+-- 5. Analytics: Extension Install Events
+CREATE TABLE IF NOT EXISTS extension_install_events (
+    id SERIAL PRIMARY KEY,
+    device_id UUID NOT NULL,
+    user_id INTEGER NULL REFERENCES users(id) ON DELETE SET NULL,
+    extension_id TEXT NOT NULL,
+    extension_name TEXT NULL,
+    created_at TIMESTAMPTZ DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_ext_events_extension_id ON extension_install_events(extension_id);`;
 
   const envContent = `# Neon Database Connection String
 DATABASE_URL="postgresql://username:password@ep-sample-123456.us-east-2.aws.neon.tech/neondb?sslmode=require"
 
 # JWT Signing Secret (generate a long random string for production on Render)
 JWT_SECRET="generate-a-secure-random-64-character-jwt-signing-secret"
+
+# Comma-separated list of admin emails allowed to access GET /api/admin/dashboard
+ADMIN_EMAILS="you@example.com,admin@yourdomain.com"
 
 # GitHub OAuth Credentials
 GITHUB_CLIENT_ID="your_github_client_id"
@@ -63,10 +91,10 @@ PORT="3000"`;
     >
       <div>
         <h2 className="text-base font-semibold text-slate-800 tracking-tight">
-          REST API Reference & Security Guide
+          REST API Reference & Analytics Architecture
         </h2>
         <p className="text-xs text-slate-500 mt-1">
-          Complete documentation of Bcrypt authentication, JWT security middleware, PostgreSQL schemas, and Render configuration.
+          Complete documentation of Bcrypt authentication, JWT middleware, telemetry tracking, admin dashboard aggregation, and PostgreSQL schemas.
         </p>
       </div>
 
@@ -91,8 +119,76 @@ PORT="3000"`;
       {/* Route List */}
       <div className="space-y-4">
         <h3 className="text-xs font-bold text-slate-700 uppercase tracking-wider">
-          Authentication & API Endpoints
+          API Endpoints & Contracts
         </h3>
+
+        {/* GET /api/admin/dashboard */}
+        <div className="p-3.5 border border-purple-200 rounded text-xs space-y-1.5 bg-purple-50/20">
+          <div className="flex items-center gap-2">
+            <span className="px-1.5 py-0.5 rounded text-[10px] font-mono font-bold bg-purple-100 text-purple-800">
+              GET
+            </span>
+            <code className="font-mono font-bold text-slate-900">/api/admin/dashboard</code>
+            <span className="text-[10px] px-1.5 py-0.2 rounded bg-purple-100 text-purple-900 font-medium">Admin JWT Only</span>
+          </div>
+          <p className="text-slate-600">
+            Returns aggregated installation and user metrics, active users (5m / 24h), top 10 languages, and top 10 extensions. Validates that the authenticated user's email is in <code className="font-mono text-slate-800">ADMIN_EMAILS</code>.
+          </p>
+          <div className="bg-slate-100 p-2 rounded font-mono text-[11px] text-slate-800">
+            Headers: Authorization: Bearer &lt;admin_jwt_token&gt;<br />
+            Returns: &#123; "success": true, "storage": "neon_postgres" | "memory_fallback", "totals": &#123; "total_users": 10, "active_now": 2, ... &#125;, "top_languages": [...], "top_extensions": [...] &#125;
+          </div>
+        </div>
+
+        {/* POST /api/analytics/language-event */}
+        <div className="p-3.5 border border-slate-200 rounded text-xs space-y-1.5 bg-slate-50/50">
+          <div className="flex items-center gap-2">
+            <span className="px-1.5 py-0.5 rounded text-[10px] font-mono font-bold bg-blue-100 text-blue-800">
+              POST
+            </span>
+            <code className="font-mono font-bold text-slate-900">/api/analytics/language-event</code>
+            <span className="text-[10px] px-1.5 py-0.2 rounded bg-slate-200 text-slate-700 font-medium">Optional Auth</span>
+          </div>
+          <p className="text-slate-600">
+            Logs language usage events for a device. If a valid JWT Bearer token is provided, links <code className="font-mono text-slate-800">user_id</code> automatically.
+          </p>
+          <div className="bg-slate-100 p-2 rounded font-mono text-[11px] text-slate-800">
+            Body: &#123; "device_id": UUID, "language": string, "action"?: string &#125;<br />
+            Returns: &#123; "success": true, "storage": "neon_postgres" | "memory_fallback" &#125;
+          </div>
+        </div>
+
+        {/* POST /api/analytics/extension-install */}
+        <div className="p-3.5 border border-slate-200 rounded text-xs space-y-1.5 bg-slate-50/50">
+          <div className="flex items-center gap-2">
+            <span className="px-1.5 py-0.5 rounded text-[10px] font-mono font-bold bg-blue-100 text-blue-800">
+              POST
+            </span>
+            <code className="font-mono font-bold text-slate-900">/api/analytics/extension-install</code>
+            <span className="text-[10px] px-1.5 py-0.2 rounded bg-slate-200 text-slate-700 font-medium">Optional Auth</span>
+          </div>
+          <p className="text-slate-600">
+            Logs extension install events for telemetry.
+          </p>
+          <div className="bg-slate-100 p-2 rounded font-mono text-[11px] text-slate-800">
+            Body: &#123; "device_id": UUID, "extension_id": string, "extension_name"?: string &#125;<br />
+            Returns: &#123; "success": true, "storage": "neon_postgres" | "memory_fallback" &#125;
+          </div>
+        </div>
+
+        {/* POST /api/github/mark-connected */}
+        <div className="p-3.5 border border-slate-200 rounded text-xs space-y-1.5 bg-amber-50/30">
+          <div className="flex items-center gap-2">
+            <span className="px-1.5 py-0.5 rounded text-[10px] font-mono font-bold bg-purple-100 text-purple-800">
+              POST
+            </span>
+            <code className="font-mono font-bold text-slate-900">/api/github/mark-connected</code>
+            <span className="text-[10px] px-1.5 py-0.2 rounded bg-amber-100 text-amber-900 font-medium">JWT Required</span>
+          </div>
+          <p className="text-slate-600">
+            Marks the currently authenticated user as having connected their GitHub account (<code className="font-mono text-slate-800">github_connected = TRUE, github_connected_at = NOW()</code>).
+          </p>
+        </div>
 
         {/* POST /api/auth/register */}
         <div className="p-3.5 border border-slate-200 rounded text-xs space-y-1.5 bg-slate-50/50">
@@ -104,12 +200,8 @@ PORT="3000"`;
             <span className="text-[10px] px-1.5 py-0.2 rounded bg-emerald-100 text-emerald-800 font-medium">Public</span>
           </div>
           <p className="text-slate-600">
-            Expects plaintext password in request body. Hashes password with <code className="font-mono text-slate-800">bcrypt.hash(password, 12)</code> before storing in <code className="font-mono text-slate-800">password_hash</code>. Generates and returns a signed 30-day JWT. Never logs the plaintext password.
+            Expects plaintext password in request body. Hashes password with <code className="font-mono text-slate-800">bcrypt.hash(password, 12)</code>. Returns signed 30-day JWT.
           </p>
-          <div className="bg-slate-100 p-2 rounded font-mono text-[11px] text-slate-800">
-            Body: &#123; "email": string, "password": string (plaintext), "name"?: string &#125;<br />
-            Returns: &#123; "success": true, "user": &#123; "id": 1, "email": "...", "name": "..." &#125;, "token": "eyJhbGci..." &#125;
-          </div>
         </div>
 
         {/* POST /api/auth/login */}
@@ -122,12 +214,8 @@ PORT="3000"`;
             <span className="text-[10px] px-1.5 py-0.2 rounded bg-emerald-100 text-emerald-800 font-medium">Public</span>
           </div>
           <p className="text-slate-600">
-            Expects plaintext password. Looks up user by email and compares via <code className="font-mono text-slate-800">bcrypt.compare(password, storedHash)</code> (constant-time verification). Returns signed JWT with 30-day expiry.
+            Verifies credentials with <code className="font-mono text-slate-800">bcrypt.compare(password, storedHash)</code> and returns JWT token.
           </p>
-          <div className="bg-slate-100 p-2 rounded font-mono text-[11px] text-slate-800">
-            Body: &#123; "email": string, "password": string &#125;<br />
-            Returns: &#123; "success": true, "user": &#123; ... &#125;, "token": "eyJhbGci..." &#125;
-          </div>
         </div>
 
         {/* POST /api/projects/save */}
@@ -142,10 +230,6 @@ PORT="3000"`;
           <p className="text-slate-600">
             Upserts user project using verified <code className="font-mono text-slate-800">req.userId</code> from JWT.
           </p>
-          <div className="bg-slate-100 p-2 rounded font-mono text-[11px] text-slate-800">
-            Headers: Authorization: Bearer &lt;token&gt;<br />
-            Body: &#123; "project_id": string, "name": string, "data"?: any &#125;
-          </div>
         </div>
 
         {/* GET /api/projects/user/:userId */}
@@ -158,80 +242,21 @@ PORT="3000"`;
             <span className="text-[10px] px-1.5 py-0.2 rounded bg-amber-100 text-amber-900 font-medium">JWT Required</span>
           </div>
           <p className="text-slate-600">
-            Returns all projects owned by the authenticated user. Uses <code className="font-mono text-slate-800">req.userId</code> from token, returning 403 Forbidden if a user attempts to query another user's projects.
-          </p>
-          <div className="bg-slate-100 p-2 rounded font-mono text-[11px] text-slate-800">
-            Headers: Authorization: Bearer &lt;token&gt;
-          </div>
-        </div>
-
-        {/* DELETE /api/projects/:userId/:projectId */}
-        <div className="p-3.5 border border-slate-200 rounded text-xs space-y-1.5 bg-amber-50/30">
-          <div className="flex items-center gap-2">
-            <span className="px-1.5 py-0.5 rounded text-[10px] font-mono font-bold bg-rose-100 text-rose-800">
-              DELETE
-            </span>
-            <code className="font-mono font-bold text-slate-900">/api/projects/:userId/:projectId</code>
-            <span className="text-[10px] px-1.5 py-0.2 rounded bg-amber-100 text-amber-900 font-medium">JWT Required</span>
-          </div>
-          <p className="text-slate-600">
-            Deletes the specified project belonging to <code className="font-mono text-slate-800">req.userId</code>.
+            Returns all projects owned by the authenticated user.
           </p>
         </div>
 
-        {/* POST /api/devices/link-user */}
-        <div className="p-3.5 border border-slate-200 rounded text-xs space-y-1.5 bg-amber-50/30">
-          <div className="flex items-center gap-2">
-            <span className="px-1.5 py-0.5 rounded text-[10px] font-mono font-bold bg-purple-100 text-purple-800">
-              POST
-            </span>
-            <code className="font-mono font-bold text-slate-900">/api/devices/link-user</code>
-            <span className="text-[10px] px-1.5 py-0.2 rounded bg-amber-100 text-amber-900 font-medium">JWT Required</span>
-          </div>
-          <p className="text-slate-600">
-            Updates matching device row with authenticated <code className="font-mono text-slate-800">req.userId</code> and sets <code className="font-mono text-slate-800">last_seen_at = now()</code>.
-          </p>
-          <div className="bg-slate-100 p-2 rounded font-mono text-[11px] text-slate-800">
-            Headers: Authorization: Bearer &lt;token&gt;<br />
-            Body: &#123; "device_id": string (UUID) &#125;
-          </div>
-        </div>
-
-        {/* Public Utility Endpoints */}
-        <div className="p-3 border border-slate-200 rounded text-xs space-y-1.5">
-          <div className="flex items-center gap-2">
-            <span className="px-1.5 py-0.5 rounded text-[10px] font-mono font-bold bg-emerald-100 text-emerald-800">
-              GET
-            </span>
-            <code className="font-mono font-bold text-slate-900">/health</code>
-            <span className="text-slate-500">(also /api/health)</span>
-          </div>
-          <p className="text-slate-600">
-            Returns HTTP 200 OK with database connection status and environment configuration.
-          </p>
-        </div>
-
+        {/* POST /api/devices/register & link-user */}
         <div className="p-3 border border-slate-200 rounded text-xs space-y-1.5">
           <div className="flex items-center gap-2">
             <span className="px-1.5 py-0.5 rounded text-[10px] font-mono font-bold bg-blue-100 text-blue-800">
               POST
             </span>
             <code className="font-mono font-bold text-slate-900">/api/devices/register</code>
+            <code className="font-mono font-bold text-slate-900 ml-2">/api/devices/link-user</code>
           </div>
           <p className="text-slate-600">
-            Upserts by <code className="font-mono text-slate-800">device_id</code>: inserts if new record, or updates <code className="font-mono text-slate-800">fcm_token</code> and <code className="font-mono text-slate-800">last_seen_at</code> if already exists.
-          </p>
-        </div>
-
-        <div className="p-3 border border-slate-200 rounded text-xs space-y-1.5">
-          <div className="flex items-center gap-2">
-            <span className="px-1.5 py-0.5 rounded text-[10px] font-mono font-bold bg-amber-100 text-amber-900">
-              POST
-            </span>
-            <code className="font-mono font-bold text-slate-900">/api/github/exchange-token</code>
-          </div>
-          <p className="text-slate-600">
-            Exchanges GitHub OAuth temporary code for an access token on the server side without exposing <code className="font-mono text-slate-800">GITHUB_CLIENT_SECRET</code>.
+            Device registration and JWT user-device linking.
           </p>
         </div>
       </div>

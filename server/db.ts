@@ -87,6 +87,10 @@ export async function initDatabase(): Promise<{ success: boolean; error?: string
           updated_at TIMESTAMPTZ DEFAULT now()
       );
 
+      -- Users extra columns for GitHub connection tracking
+      ALTER TABLE users ADD COLUMN IF NOT EXISTS github_connected BOOLEAN NOT NULL DEFAULT FALSE;
+      ALTER TABLE users ADD COLUMN IF NOT EXISTS github_connected_at TIMESTAMPTZ NULL;
+
       -- Device registrations
       CREATE TABLE IF NOT EXISTS device_registrations (
           id SERIAL PRIMARY KEY,
@@ -110,13 +114,36 @@ export async function initDatabase(): Promise<{ success: boolean; error?: string
           updated_at TIMESTAMPTZ DEFAULT now(),
           CONSTRAINT uq_user_project UNIQUE (user_id, project_id)
       );
+
+      -- Analytics: Language events
+      CREATE TABLE IF NOT EXISTS language_events (
+          id SERIAL PRIMARY KEY,
+          device_id UUID NOT NULL,
+          user_id INTEGER NULL REFERENCES users(id) ON DELETE SET NULL,
+          language TEXT NOT NULL,
+          action TEXT NOT NULL DEFAULT 'open',
+          created_at TIMESTAMPTZ DEFAULT now()
+      );
+      CREATE INDEX IF NOT EXISTS idx_language_events_language ON language_events(language);
+      CREATE INDEX IF NOT EXISTS idx_language_events_created_at ON language_events(created_at);
+
+      -- Analytics: Extension install events
+      CREATE TABLE IF NOT EXISTS extension_install_events (
+          id SERIAL PRIMARY KEY,
+          device_id UUID NOT NULL,
+          user_id INTEGER NULL REFERENCES users(id) ON DELETE SET NULL,
+          extension_id TEXT NOT NULL,
+          extension_name TEXT NULL,
+          created_at TIMESTAMPTZ DEFAULT now()
+      );
+      CREATE INDEX IF NOT EXISTS idx_ext_events_extension_id ON extension_install_events(extension_id);
     `;
 
     const client = await dbPool.connect();
     try {
       await client.query(createTablesQuery);
       isInitialized = true;
-      console.log('✅ PostgreSQL: "users", "device_registrations", and "projects" tables verified/created successfully.');
+      console.log('✅ PostgreSQL: "users", "device_registrations", "projects", "language_events", and "extension_install_events" tables verified/created successfully.');
       return { success: true };
     } finally {
       client.release();
