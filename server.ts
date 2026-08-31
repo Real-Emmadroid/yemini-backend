@@ -5,6 +5,7 @@ import dotenv from 'dotenv';
 import { createServer as createViteServer } from 'vite';
 import { initDatabase } from './server/db';
 import apiRouter, { handleHealthCheck } from './server/routes';
+import yeminiRouter from './server/yemini-routes';
 
 // Load environment variables
 dotenv.config();
@@ -23,8 +24,11 @@ async function startServer() {
   // Root health check endpoint for Render/uptime monitors (GET /health)
   app.get('/health', handleHealthCheck);
 
-  // Mount API router
+  // Mount existing API router (/api/devices, /api/auth, /api/projects, etc.)
   app.use('/api', apiRouter);
+
+  // Mount isolated Yemini Converter router at distinct prefix (/api/yemini)
+  app.use('/api/yemini', yeminiRouter);
 
   // Initialize PostgreSQL database and create table if not exists
   initDatabase().catch((err) => {
@@ -60,6 +64,8 @@ async function startServer() {
     console.log(`📲 Device register: POST http://localhost:${PORT}/api/devices/register`);
     console.log(`🔗 Link user: POST http://localhost:${PORT}/api/devices/link-user`);
     console.log(`🐙 GitHub token exchange: POST http://localhost:${PORT}/api/github/exchange-token`);
+    console.log(`📄 Yemini PDF->DOCX: POST http://localhost:${PORT}/api/yemini/convert-pdf-to-docx`);
+    console.log(`🩺 Yemini health: GET http://localhost:${PORT}/api/yemini/health`);
   });
 
   // Graceful shutdown handling

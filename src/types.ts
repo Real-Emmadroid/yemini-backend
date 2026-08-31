@@ -104,6 +104,20 @@ export interface AdminDashboardData {
   top_extensions: Array<{ extension_id: string; extension_name: string | null; count: number }>;
 }
 
+export interface YeminiHealthResponse {
+  status: string;
+  service: string;
+  timestamp: string;
+  configured_providers_count: number;
+  providers: {
+    iloveapi: boolean;
+    nutrient: boolean;
+    cloudconvert: boolean;
+    adobe: boolean;
+  };
+  fallback_order: string[];
+}
+
 export interface ApiResponse<T = any> {
   success?: boolean;
   storage?: 'neon_postgres' | 'memory_fallback';

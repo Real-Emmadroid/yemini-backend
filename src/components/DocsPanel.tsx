@@ -81,6 +81,13 @@ ADMIN_EMAILS="you@example.com,admin@yourdomain.com"
 GITHUB_CLIENT_ID="your_github_client_id"
 GITHUB_CLIENT_SECRET="your_github_client_secret"
 
+# Yemini Converter - 4-Provider PDF to DOCX Fallback Chain
+ILOVEPDF_SECRET_KEY=""
+NUTRIENT_API_KEY=""
+CLOUDCONVERT_API_KEY=""
+ADOBE_CLIENT_ID=""
+ADOBE_CLIENT_SECRET=""
+
 # Server Port (Render injects process.env.PORT automatically)
 PORT="3000"`;
 
@@ -91,10 +98,10 @@ PORT="3000"`;
     >
       <div>
         <h2 className="text-base font-semibold text-slate-800 tracking-tight">
-          REST API Reference & Analytics Architecture
+          REST API Reference & Multi-Service Architecture
         </h2>
         <p className="text-xs text-slate-500 mt-1">
-          Complete documentation of Bcrypt authentication, JWT middleware, telemetry tracking, admin dashboard aggregation, and PostgreSQL schemas.
+          Complete documentation of Bcrypt authentication, JWT middleware, telemetry tracking, admin dashboard aggregation, PostgreSQL schemas, and the isolated Yemini PDF→DOCX converter.
         </p>
       </div>
 
@@ -122,6 +129,39 @@ PORT="3000"`;
           API Endpoints & Contracts
         </h3>
 
+        {/* POST /api/yemini/convert-pdf-to-docx */}
+        <div className="p-3.5 border border-emerald-300 rounded text-xs space-y-1.5 bg-emerald-50/30">
+          <div className="flex items-center gap-2">
+            <span className="px-1.5 py-0.5 rounded text-[10px] font-mono font-bold bg-emerald-600 text-white">
+              POST
+            </span>
+            <code className="font-mono font-bold text-slate-900">/api/yemini/convert-pdf-to-docx</code>
+            <span className="text-[10px] px-1.5 py-0.2 rounded bg-emerald-100 text-emerald-900 font-medium">Yemini Service</span>
+          </div>
+          <p className="text-slate-600">
+            Accepts multipart file upload (<code className="font-mono text-slate-800">file</code>), executes 4-provider fallback chain (<strong>iLoveAPI → Nutrient → CloudConvert → Adobe PDF Services</strong>). Returns raw DOCX bytes on success with <code className="font-mono text-slate-800">X-Conversion-Provider</code> header. Returns 502 Bad Gateway if all fail.
+          </p>
+          <div className="bg-slate-100 p-2 rounded font-mono text-[11px] text-slate-800">
+            Body: multipart/form-data with field 'file'<br />
+            Response (200): binary/octet-stream (DOCX) + header 'X-Conversion-Provider: &lt;provider&gt;'<br />
+            Response (502): &#123; "error": "All 4 cloud conversion providers failed...", "details": [...] &#125;
+          </div>
+        </div>
+
+        {/* GET /api/yemini/health */}
+        <div className="p-3.5 border border-emerald-200 rounded text-xs space-y-1.5 bg-emerald-50/20">
+          <div className="flex items-center gap-2">
+            <span className="px-1.5 py-0.5 rounded text-[10px] font-mono font-bold bg-emerald-100 text-emerald-800">
+              GET
+            </span>
+            <code className="font-mono font-bold text-slate-900">/api/yemini/health</code>
+            <span className="text-[10px] px-1.5 py-0.2 rounded bg-emerald-100 text-emerald-800 font-medium">Diagnostics</span>
+          </div>
+          <p className="text-slate-600">
+            Returns boolean status of which conversion providers have their environment variables configured.
+          </p>
+        </div>
+
         {/* GET /api/admin/dashboard */}
         <div className="p-3.5 border border-purple-200 rounded text-xs space-y-1.5 bg-purple-50/20">
           <div className="flex items-center gap-2">
@@ -134,10 +174,6 @@ PORT="3000"`;
           <p className="text-slate-600">
             Returns aggregated installation and user metrics, active users (5m / 24h), top 10 languages, and top 10 extensions. Validates that the authenticated user's email is in <code className="font-mono text-slate-800">ADMIN_EMAILS</code>.
           </p>
-          <div className="bg-slate-100 p-2 rounded font-mono text-[11px] text-slate-800">
-            Headers: Authorization: Bearer &lt;admin_jwt_token&gt;<br />
-            Returns: &#123; "success": true, "storage": "neon_postgres" | "memory_fallback", "totals": &#123; "total_users": 10, "active_now": 2, ... &#125;, "top_languages": [...], "top_extensions": [...] &#125;
-          </div>
         </div>
 
         {/* POST /api/analytics/language-event */}
@@ -152,10 +188,6 @@ PORT="3000"`;
           <p className="text-slate-600">
             Logs language usage events for a device. If a valid JWT Bearer token is provided, links <code className="font-mono text-slate-800">user_id</code> automatically.
           </p>
-          <div className="bg-slate-100 p-2 rounded font-mono text-[11px] text-slate-800">
-            Body: &#123; "device_id": UUID, "language": string, "action"?: string &#125;<br />
-            Returns: &#123; "success": true, "storage": "neon_postgres" | "memory_fallback" &#125;
-          </div>
         </div>
 
         {/* POST /api/analytics/extension-install */}
@@ -170,10 +202,6 @@ PORT="3000"`;
           <p className="text-slate-600">
             Logs extension install events for telemetry.
           </p>
-          <div className="bg-slate-100 p-2 rounded font-mono text-[11px] text-slate-800">
-            Body: &#123; "device_id": UUID, "extension_id": string, "extension_name"?: string &#125;<br />
-            Returns: &#123; "success": true, "storage": "neon_postgres" | "memory_fallback" &#125;
-          </div>
         </div>
 
         {/* POST /api/github/mark-connected */}
@@ -186,63 +214,36 @@ PORT="3000"`;
             <span className="text-[10px] px-1.5 py-0.2 rounded bg-amber-100 text-amber-900 font-medium">JWT Required</span>
           </div>
           <p className="text-slate-600">
-            Marks the currently authenticated user as having connected their GitHub account (<code className="font-mono text-slate-800">github_connected = TRUE, github_connected_at = NOW()</code>).
+            Marks the currently authenticated user as having connected their GitHub account.
           </p>
         </div>
 
-        {/* POST /api/auth/register */}
+        {/* POST /api/auth/register & login */}
         <div className="p-3.5 border border-slate-200 rounded text-xs space-y-1.5 bg-slate-50/50">
           <div className="flex items-center gap-2">
             <span className="px-1.5 py-0.5 rounded text-[10px] font-mono font-bold bg-blue-100 text-blue-800">
               POST
             </span>
             <code className="font-mono font-bold text-slate-900">/api/auth/register</code>
+            <code className="font-mono font-bold text-slate-900 ml-2">/api/auth/login</code>
             <span className="text-[10px] px-1.5 py-0.2 rounded bg-emerald-100 text-emerald-800 font-medium">Public</span>
           </div>
           <p className="text-slate-600">
-            Expects plaintext password in request body. Hashes password with <code className="font-mono text-slate-800">bcrypt.hash(password, 12)</code>. Returns signed 30-day JWT.
+            Bcrypt authentication with signed 30-day JWT tokens.
           </p>
         </div>
 
-        {/* POST /api/auth/login */}
-        <div className="p-3.5 border border-slate-200 rounded text-xs space-y-1.5 bg-slate-50/50">
-          <div className="flex items-center gap-2">
-            <span className="px-1.5 py-0.5 rounded text-[10px] font-mono font-bold bg-blue-100 text-blue-800">
-              POST
-            </span>
-            <code className="font-mono font-bold text-slate-900">/api/auth/login</code>
-            <span className="text-[10px] px-1.5 py-0.2 rounded bg-emerald-100 text-emerald-800 font-medium">Public</span>
-          </div>
-          <p className="text-slate-600">
-            Verifies credentials with <code className="font-mono text-slate-800">bcrypt.compare(password, storedHash)</code> and returns JWT token.
-          </p>
-        </div>
-
-        {/* POST /api/projects/save */}
+        {/* POST /api/projects/save & GET /api/projects/user/:userId */}
         <div className="p-3.5 border border-slate-200 rounded text-xs space-y-1.5 bg-amber-50/30">
           <div className="flex items-center gap-2">
             <span className="px-1.5 py-0.5 rounded text-[10px] font-mono font-bold bg-purple-100 text-purple-800">
-              POST
+              POST / GET
             </span>
-            <code className="font-mono font-bold text-slate-900">/api/projects/save</code>
+            <code className="font-mono font-bold text-slate-900">/api/projects/*</code>
             <span className="text-[10px] px-1.5 py-0.2 rounded bg-amber-100 text-amber-900 font-medium">JWT Required</span>
           </div>
           <p className="text-slate-600">
-            Upserts user project using verified <code className="font-mono text-slate-800">req.userId</code> from JWT.
-          </p>
-        </div>
-
-        {/* GET /api/projects/user/:userId */}
-        <div className="p-3.5 border border-slate-200 rounded text-xs space-y-1.5 bg-amber-50/30">
-          <div className="flex items-center gap-2">
-            <span className="px-1.5 py-0.5 rounded text-[10px] font-mono font-bold bg-emerald-100 text-emerald-800">
-              GET
-            </span>
-            <code className="font-mono font-bold text-slate-900">/api/projects/user/:userId</code>
-            <span className="text-[10px] px-1.5 py-0.2 rounded bg-amber-100 text-amber-900 font-medium">JWT Required</span>
-          </div>
-          <p className="text-slate-600">
-            Returns all projects owned by the authenticated user.
+            Per-user isolated project data management via <code className="font-mono text-slate-800">req.userId</code>.
           </p>
         </div>
 

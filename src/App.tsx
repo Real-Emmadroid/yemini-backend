@@ -8,11 +8,12 @@ import { LinkUserPanel } from './components/LinkUserPanel';
 import { GithubExchangePanel } from './components/GithubExchangePanel';
 import { DatabaseTablePanel } from './components/DatabaseTablePanel';
 import { AdminDashboardPanel } from './components/AdminDashboardPanel';
+import { YeminiConverterPanel } from './components/YeminiConverterPanel';
 import { DocsPanel } from './components/DocsPanel';
 
 export default function App() {
   const [activeTab, setActiveTab] = useState<
-    'auth' | 'admin' | 'projects' | 'register-device' | 'link-user' | 'github' | 'records' | 'docs'
+    'auth' | 'admin' | 'projects' | 'register-device' | 'link-user' | 'yemini' | 'github' | 'records' | 'docs'
   >('auth');
   const [health, setHealth] = useState<HealthResponse | null>(null);
   const [healthLoading, setHealthLoading] = useState<boolean>(true);
@@ -160,6 +161,19 @@ export default function App() {
           </button>
 
           <button
+            id="tab-btn-yemini"
+            onClick={() => setActiveTab('yemini')}
+            className={`px-3.5 py-2 rounded text-xs font-semibold tracking-wide transition-all cursor-pointer flex items-center gap-1.5 ${
+              activeTab === 'yemini'
+                ? 'bg-slate-900 text-white shadow-sm'
+                : 'text-slate-600 hover:text-slate-900 hover:bg-slate-50'
+            }`}
+          >
+            <span className="w-1.5 h-1.5 rounded-full bg-emerald-400" />
+            Yemini Converter
+          </button>
+
+          <button
             id="tab-btn-records"
             onClick={() => setActiveTab('records')}
             className={`px-3.5 py-2 rounded text-xs font-semibold tracking-wide transition-all cursor-pointer flex items-center gap-1.5 ${
@@ -239,6 +253,10 @@ export default function App() {
             currentUser={currentUser}
             onSuccess={fetchDevices}
           />
+        )}
+
+        {activeTab === 'yemini' && (
+          <YeminiConverterPanel />
         )}
 
         {activeTab === 'records' && (
