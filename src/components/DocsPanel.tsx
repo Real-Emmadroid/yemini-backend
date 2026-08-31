@@ -139,7 +139,7 @@ PORT="3000"`;
             <span className="text-[10px] px-1.5 py-0.2 rounded bg-emerald-100 text-emerald-900 font-medium">Yemini Service</span>
           </div>
           <p className="text-slate-600">
-            Accepts multipart file upload (<code className="font-mono text-slate-800">file</code>), executes 4-provider fallback chain (<strong>iLoveAPI → Nutrient → CloudConvert → Adobe PDF Services</strong>). Returns raw DOCX bytes on success with <code className="font-mono text-slate-800">X-Conversion-Provider</code> header. Returns 502 Bad Gateway if all fail.
+            Accepts multipart file upload (<code className="font-mono text-slate-800">file</code>), executes 4-provider fallback chain (<strong>iLoveAPI → CloudConvert → Adobe PDF Services → Nutrient</strong>). Returns raw DOCX bytes on success with <code className="font-mono text-slate-800">X-Conversion-Provider</code> header. Returns 502 Bad Gateway if all fail.
           </p>
           <div className="bg-slate-100 p-2 rounded font-mono text-[11px] text-slate-800">
             Body: multipart/form-data with field 'file'<br />

@@ -160,7 +160,7 @@ startxref
               </span>
             </h2>
             <p className="text-xs text-slate-500 mt-1">
-              4-Provider Fallback Chain: <strong className="text-slate-800">iLoveAPI</strong> → <strong className="text-slate-800">Nutrient</strong> → <strong className="text-slate-800">CloudConvert</strong> → <strong className="text-slate-800">Adobe PDF Services</strong>. First success wins; returns HTTP 502 if all fail so the client app triggers on-device conversion.
+              4-Provider Fallback Chain: <strong className="text-slate-800">iLoveAPI</strong> → <strong className="text-slate-800">CloudConvert</strong> → <strong className="text-slate-800">Adobe PDF Services</strong> → <strong className="text-slate-800">Nutrient</strong>. First success wins; returns HTTP 502 if all fail so the client app triggers on-device conversion.
             </p>
           </div>
 
@@ -208,29 +208,10 @@ startxref
                 </div>
               </div>
 
-              {/* 2. Nutrient */}
+              {/* 2. CloudConvert */}
               <div className="p-3.5 bg-slate-50 border border-slate-200 rounded-lg space-y-1.5">
                 <div className="flex items-center justify-between">
-                  <span className="text-xs font-bold text-slate-900 font-mono">2. Nutrient</span>
-                  <span
-                    className={`w-2 h-2 rounded-full ${
-                      health.providers.nutrient ? 'bg-emerald-500' : 'bg-slate-300'
-                    }`}
-                  />
-                </div>
-                <div className="text-[11px] text-slate-500 font-mono">
-                  {health.providers.nutrient ? (
-                    <span className="text-emerald-700 font-semibold">Configured</span>
-                  ) : (
-                    <span className="text-slate-400">NUTRIENT_API_KEY unset</span>
-                  )}
-                </div>
-              </div>
-
-              {/* 3. CloudConvert */}
-              <div className="p-3.5 bg-slate-50 border border-slate-200 rounded-lg space-y-1.5">
-                <div className="flex items-center justify-between">
-                  <span className="text-xs font-bold text-slate-900 font-mono">3. CloudConvert</span>
+                  <span className="text-xs font-bold text-slate-900 font-mono">2. CloudConvert</span>
                   <span
                     className={`w-2 h-2 rounded-full ${
                       health.providers.cloudconvert ? 'bg-emerald-500' : 'bg-slate-300'
@@ -246,10 +227,10 @@ startxref
                 </div>
               </div>
 
-              {/* 4. Adobe PDF Services */}
+              {/* 3. Adobe PDF Services */}
               <div className="p-3.5 bg-slate-50 border border-slate-200 rounded-lg space-y-1.5">
                 <div className="flex items-center justify-between">
-                  <span className="text-xs font-bold text-slate-900 font-mono">4. Adobe PDF</span>
+                  <span className="text-xs font-bold text-slate-900 font-mono">3. Adobe PDF</span>
                   <span
                     className={`w-2 h-2 rounded-full ${
                       health.providers.adobe ? 'bg-emerald-500' : 'bg-slate-300'
@@ -261,6 +242,28 @@ startxref
                     <span className="text-emerald-700 font-semibold">Configured</span>
                   ) : (
                     <span className="text-slate-400">ADOBE_CLIENT_* unset</span>
+                  )}
+                </div>
+              </div>
+
+              {/* 4. Nutrient */}
+              <div className="p-3.5 bg-slate-50 border border-slate-200 rounded-lg space-y-1.5">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-1.5">
+                    <span className="text-xs font-bold text-slate-900 font-mono">4. Nutrient</span>
+                    <span className="text-[9px] px-1 py-0.2 rounded bg-amber-100 text-amber-800 font-medium">Last Resort</span>
+                  </div>
+                  <span
+                    className={`w-2 h-2 rounded-full ${
+                      health.providers.nutrient ? 'bg-emerald-500' : 'bg-slate-300'
+                    }`}
+                  />
+                </div>
+                <div className="text-[11px] text-slate-500 font-mono">
+                  {health.providers.nutrient ? (
+                    <span className="text-emerald-700 font-semibold">Configured</span>
+                  ) : (
+                    <span className="text-slate-400">NUTRIENT_API_KEY unset</span>
                   )}
                 </div>
               </div>

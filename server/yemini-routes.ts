@@ -513,7 +513,7 @@ router.get('/health', (req: Request, res: Response): void => {
     timestamp: new Date().toISOString(),
     configured_providers_count: configuredCount,
     providers,
-    fallback_order: ['iloveapi', 'nutrient', 'cloudconvert', 'adobe'],
+    fallback_order: ['iloveapi', 'cloudconvert', 'adobe', 'nutrient'],
   });
 });
 
@@ -553,26 +553,9 @@ router.post(
       providerErrors.push({ provider: 'iloveapi', error: message });
     }
 
-    // Chain 2: Nutrient
+    // Chain 2: CloudConvert
     try {
-      console.log('[Yemini Converter] [2/4] Trying Nutrient...');
-      const docxBuffer = await convertWithNutrient(file.buffer, originalName);
-      console.log('[Yemini Converter] ✅ Nutrient conversion succeeded.');
-
-      res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document');
-      res.setHeader('X-Conversion-Provider', 'nutrient');
-      res.setHeader('Content-Disposition', `attachment; filename="${originalName.replace(/\.pdf$/i, '')}.docx"`);
-      res.status(200).send(docxBuffer);
-      return;
-    } catch (err: any) {
-      const message = err.message || 'Unknown error in Nutrient provider';
-      console.warn(`[Yemini Converter] ⚠️ Nutrient failed: ${message}`);
-      providerErrors.push({ provider: 'nutrient', error: message });
-    }
-
-    // Chain 3: CloudConvert
-    try {
-      console.log('[Yemini Converter] [3/4] Trying CloudConvert...');
+      console.log('[Yemini Converter] [2/4] Trying CloudConvert...');
       const docxBuffer = await convertWithCloudConvert(file.buffer, originalName);
       console.log('[Yemini Converter] ✅ CloudConvert conversion succeeded.');
 
@@ -587,9 +570,9 @@ router.post(
       providerErrors.push({ provider: 'cloudconvert', error: message });
     }
 
-    // Chain 4: Adobe PDF Services
+    // Chain 3: Adobe PDF Services
     try {
-      console.log('[Yemini Converter] [4/4] Trying Adobe PDF Services...');
+      console.log('[Yemini Converter] [3/4] Trying Adobe PDF Services...');
       const docxBuffer = await convertWithAdobe(file.buffer, originalName);
       console.log('[Yemini Converter] ✅ Adobe PDF Services conversion succeeded.');
 
@@ -602,6 +585,24 @@ router.post(
       const message = err.message || 'Unknown error in Adobe provider';
       console.warn(`[Yemini Converter] ⚠️ Adobe PDF Services failed: ${message}`);
       providerErrors.push({ provider: 'adobe', error: message });
+    }
+
+    // Chain 4: Nutrient
+    // Last resort — free tier output is watermarked, see conversation notes.
+    try {
+      console.log('[Yemini Converter] [4/4] Trying Nutrient...');
+      const docxBuffer = await convertWithNutrient(file.buffer, originalName);
+      console.log('[Yemini Converter] ✅ Nutrient conversion succeeded.');
+
+      res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document');
+      res.setHeader('X-Conversion-Provider', 'nutrient');
+      res.setHeader('Content-Disposition', `attachment; filename="${originalName.replace(/\.pdf$/i, '')}.docx"`);
+      res.status(200).send(docxBuffer);
+      return;
+    } catch (err: any) {
+      const message = err.message || 'Unknown error in Nutrient provider';
+      console.warn(`[Yemini Converter] ⚠️ Nutrient failed: ${message}`);
+      providerErrors.push({ provider: 'nutrient', error: message });
     }
 
     // All 4 failed: Return 502 Bad Gateway with details for on-device fallback
