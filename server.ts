@@ -16,6 +16,9 @@ const HOST = '0.0.0.0';
 async function startServer() {
   const app = express();
 
+  // Trust proxy for rate limiting behind Render/reverse proxy
+  app.set('trust proxy', 1);
+
   // Basic security and parsing middleware
   app.use(cors());
   app.use(express.json());

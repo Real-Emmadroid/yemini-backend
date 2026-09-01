@@ -1,9 +1,43 @@
 import { Router, Request, Response, NextFunction } from 'express';
 import bcrypt from 'bcrypt';
 import jwt from 'jsonwebtoken';
+import rateLimit from 'express-rate-limit';
 import { query, checkDbConnection, isDbConfigured, getPool } from './db';
 
 const router = Router();
+
+// General limiter: applies to every route on this router as a baseline.
+// Generous enough for normal app usage, tight enough to stop flooding.
+const generalLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000, // 15 minutes
+  max: 200,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: 'Too many requests. Please try again shortly.' },
+});
+
+// Strict limiter for login/register specifically — slows down
+// brute-force credential attempts far more than the general limit.
+const authLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 10,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: 'Too many attempts. Please try again in a few minutes.' },
+});
+
+// Moderate limiter for the unauthenticated device/analytics endpoints —
+// legitimate devices call these periodically, so this is looser than
+// the auth limiter but still stops spam registration/analytics abuse.
+const deviceLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 60,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: 'Too many requests. Please try again shortly.' },
+});
+
+router.use(generalLimiter);
 
 // Extend Request type to include verified authenticated user ID
 export interface AuthenticatedRequest extends Request {
@@ -257,7 +291,7 @@ router.get('/health', handleHealthCheck);
 // POST /api/auth/register
 // Body: { email, password, name? }
 // Hashes password with bcrypt.hash(password, 12) before storage. Never logs plaintext password.
-router.post('/auth/register', async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+router.post('/auth/register', authLimiter, async (req: Request, res: Response, next: NextFunction): Promise<void> => {
   try {
     const { email, password, name } = req.body || {};
 
@@ -363,7 +397,7 @@ router.post('/auth/register', async (req: Request, res: Response, next: NextFunc
 // POST /api/auth/login
 // Body: { email, password }
 // Looks up user by email, compares with bcrypt.compare(password, storedHash). Never direct string equality.
-router.post('/auth/login', async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+router.post('/auth/login', authLimiter, async (req: Request, res: Response, next: NextFunction): Promise<void> => {
   try {
     const { email, password } = req.body || {};
 
@@ -487,7 +521,7 @@ router.get('/auth/me', authenticateToken, async (req: AuthenticatedRequest, res:
 // POST /api/devices/register (Public - device onboarding)
 // Body: { device_id, fcm_token, app_version, platform }
 // Upsert by device_id: insert if new, update fcm_token/last_seen_at if it already exists
-router.post('/devices/register', async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+router.post('/devices/register', deviceLimiter, async (req: Request, res: Response, next: NextFunction): Promise<void> => {
   try {
     const { device_id, fcm_token, app_version, platform } = req.body || {};
 
@@ -1070,7 +1104,7 @@ router.post('/github/exchange-token', async (req: Request, res: Response, next: 
 
 // POST /api/analytics/language-event
 // Body: { device_id, language, action? }  action defaults to 'open'
-router.post('/analytics/language-event', optionalAuth, async (req: AuthenticatedRequest, res: Response): Promise<void> => {
+router.post('/analytics/language-event', deviceLimiter, optionalAuth, async (req: AuthenticatedRequest, res: Response): Promise<void> => {
   try {
     const { device_id, language, action } = req.body || {};
     if (!device_id || typeof device_id !== 'string' || !isValidUuid(device_id.trim())) {
@@ -1109,7 +1143,7 @@ router.post('/analytics/language-event', optionalAuth, async (req: Authenticated
 
 // POST /api/analytics/extension-install
 // Body: { device_id, extension_id, extension_name? }
-router.post('/analytics/extension-install', optionalAuth, async (req: AuthenticatedRequest, res: Response): Promise<void> => {
+router.post('/analytics/extension-install', deviceLimiter, optionalAuth, async (req: AuthenticatedRequest, res: Response): Promise<void> => {
   try {
     const { device_id, extension_id, extension_name } = req.body || {};
     if (!device_id || typeof device_id !== 'string' || !isValidUuid(device_id.trim())) {
