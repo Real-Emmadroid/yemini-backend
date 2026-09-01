@@ -2,6 +2,7 @@ import React, { useState, useEffect, useCallback } from 'react';
 import { YeminiHealthResponse } from '../types';
 
 export const YeminiConverterPanel: React.FC = () => {
+  const [appSecret, setAppSecret] = useState<string>(() => localStorage.getItem('yemini_app_secret') || '');
   const [health, setHealth] = useState<YeminiHealthResponse | null>(null);
   const [healthLoading, setHealthLoading] = useState<boolean>(false);
   const [healthError, setHealthError] = useState<string | null>(null);
@@ -19,9 +20,21 @@ export const YeminiConverterPanel: React.FC = () => {
     setHealthLoading(true);
     setHealthError(null);
     try {
-      const res = await fetch('/api/yemini/health');
+      const headers: Record<string, string> = {};
+      if (appSecret.trim()) {
+        headers['X-App-Secret'] = appSecret.trim();
+      }
+      const res = await fetch('/api/yemini/health', { headers });
       if (!res.ok) {
-        throw new Error(`HTTP ${res.status}: Failed to fetch Yemini health`);
+        const errJson = await res.json().catch(() => ({}));
+        if (res.status === 401) {
+          throw new Error('401 Unauthorized: Invalid or missing X-App-Secret header');
+        } else if (res.status === 503) {
+          throw new Error('503 Service Unavailable: APP_SHARED_SECRET not set in server environment');
+        } else if (res.status === 429) {
+          throw new Error('429 Rate Limited: Too many requests on /api/yemini/*');
+        }
+        throw new Error(errJson.error || `HTTP ${res.status}: Failed to fetch Yemini health`);
       }
       const data: YeminiHealthResponse = await res.json();
       setHealth(data);
@@ -30,11 +43,17 @@ export const YeminiConverterPanel: React.FC = () => {
     } finally {
       setHealthLoading(false);
     }
-  }, []);
+  }, [appSecret]);
 
   useEffect(() => {
     fetchHealth();
   }, [fetchHealth]);
+
+  const handleSecretChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const val = e.target.value;
+    setAppSecret(val);
+    localStorage.setItem('yemini_app_secret', val);
+  };
 
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     if (e.target.files && e.target.files.length > 0) {
@@ -116,8 +135,14 @@ startxref
       const formData = new FormData();
       formData.append('file', selectedFile);
 
+      const headers: Record<string, string> = {};
+      if (appSecret.trim()) {
+        headers['X-App-Secret'] = appSecret.trim();
+      }
+
       const res = await fetch('/api/yemini/convert-pdf-to-docx', {
         method: 'POST',
+        headers,
         body: formData,
       });
 
@@ -149,6 +174,36 @@ startxref
 
   return (
     <div id="panel-yemini-converter" className="space-y-6">
+      {/* Client App-Secret Configuration Bar */}
+      <div className="bg-white border border-slate-200 rounded-lg p-4 shadow-sm">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+          <div className="flex-1">
+            <label className="block text-xs font-bold text-slate-800 tracking-tight mb-1">
+              Shared App Secret (<code className="font-mono text-slate-900">X-App-Secret</code>)
+            </label>
+            <p className="text-[11px] text-slate-500">
+              Protects all <code className="font-mono text-slate-700">/api/yemini/*</code> endpoints (rate limit: 30 req / 15m). Matches <code className="font-mono text-slate-700">APP_SHARED_SECRET</code> in environment.
+            </p>
+          </div>
+          <div className="flex items-center gap-2 sm:w-80">
+            <input
+              id="input-yemini-secret"
+              type="password"
+              placeholder="Paste APP_SHARED_SECRET..."
+              value={appSecret}
+              onChange={handleSecretChange}
+              className="flex-1 px-3 py-1.5 text-xs font-mono border border-slate-300 rounded focus:outline-none focus:border-slate-800"
+            />
+            <button
+              id="btn-apply-secret-test"
+              onClick={fetchHealth}
+              className="px-3 py-1.5 bg-slate-900 hover:bg-slate-800 text-white rounded text-xs font-semibold cursor-pointer"
+            >
+              Test
+            </button>
+          </div>
+        </div>
+      </div>
       {/* Overview & Diagnostics */}
       <div className="bg-white border border-slate-200 rounded-lg p-6 shadow-sm">
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-slate-100 pb-4">

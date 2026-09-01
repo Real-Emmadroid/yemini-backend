@@ -81,12 +81,13 @@ ADMIN_EMAILS="you@example.com,admin@yourdomain.com"
 GITHUB_CLIENT_ID="your_github_client_id"
 GITHUB_CLIENT_SECRET="your_github_client_secret"
 
-# Yemini Converter - 4-Provider PDF to DOCX Fallback Chain
+# Yemini Converter - 4-Provider PDF to DOCX Fallback Chain & PDF Tools
 ILOVEPDF_SECRET_KEY=""
 NUTRIENT_API_KEY=""
 CLOUDCONVERT_API_KEY=""
 ADOBE_CLIENT_ID=""
 ADOBE_CLIENT_SECRET=""
+APP_SHARED_SECRET="generate-a-secure-random-32-byte-hex-secret-for-app-clients"
 
 # Server Port (Render injects process.env.PORT automatically)
 PORT="3000"`;

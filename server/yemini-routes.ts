@@ -1,7 +1,35 @@
-import { Router, Request, Response } from 'express';
+import { Router, Request, Response, NextFunction } from 'express';
 import multer from 'multer';
+import rateLimit from 'express-rate-limit';
 
 const router = Router();
+
+// Rate limiting scoped strictly to the Yemini router
+const yeminiRateLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000, // 15 minutes
+  max: 30, // 30 requests per IP per window across all Yemini routes
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: 'rate_limited', detail: 'Too many requests. Please try again later.' },
+});
+
+router.use(yeminiRateLimiter);
+
+// Shared app-secret check scoped strictly to the Yemini router
+router.use((req: Request, res: Response, next: NextFunction) => {
+  const providedSecret = req.header('X-App-Secret');
+  const expectedSecret = process.env.APP_SHARED_SECRET;
+  if (!expectedSecret) {
+    console.warn('[yemini] APP_SHARED_SECRET not configured — rejecting all requests for safety');
+    res.status(503).json({ error: 'server_misconfigured' });
+    return;
+  }
+  if (providedSecret !== expectedSecret) {
+    res.status(401).json({ error: 'unauthorized' });
+    return;
+  }
+  next();
+});
 
 // Configure multer for memory storage with a 50MB file size limit
 const upload = multer({
@@ -20,7 +48,7 @@ interface ProviderError {
 const delay = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
 // ============================================================================
-// 1. iLoveAPI Provider (iLovePDF REST API v1)
+// 1. iLoveAPI Provider (iLovePDF REST API v1) - PDF to DOCX
 // ============================================================================
 async function convertWithILoveApi(fileBuffer: Buffer, fileName: string): Promise<Buffer> {
   const secretKey = process.env.ILOVEPDF_SECRET_KEY;
@@ -135,6 +163,126 @@ async function convertWithILoveApi(fileBuffer: Buffer, fileName: string): Promis
 
   const arrayBuffer = await downloadRes.arrayBuffer();
   return Buffer.from(arrayBuffer);
+}
+
+// ============================================================================
+// Shared iLoveAPI Task Runner for PDF Tools (Merge, Split, Compress, etc.)
+// ============================================================================
+async function runIloveApiTask(
+  tool: string,
+  files: Express.Multer.File[],
+  extraParams: Record<string, any> = {}
+): Promise<{ buffer: Buffer; filename: string }> {
+  const secretKey = process.env.ILOVEPDF_SECRET_KEY;
+  if (!secretKey || secretKey.trim() === '') {
+    throw new Error('ILOVEPDF_SECRET_KEY is not configured in environment variables');
+  }
+
+  const authResp = await fetch('https://api.ilovepdf.com/v1/auth', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ public_key: secretKey.trim() }),
+  });
+  if (!authResp.ok) throw new Error(`iLoveAPI auth failed: ${authResp.status}`);
+  const { token } = (await authResp.json()) as any;
+
+  const startResp = await fetch(`https://api.ilovepdf.com/v1/start/${tool}`, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  if (!startResp.ok) {
+    throw new Error(`iLoveAPI start failed for tool "${tool}": ${startResp.status} ${await startResp.text()}`);
+  }
+  const { server, task } = (await startResp.json()) as any;
+
+  const uploadedFiles: { server_filename: string; filename: string }[] = [];
+  for (const file of files) {
+    const form = new FormData();
+    form.append('task', task);
+    form.append('file', new Blob([new Uint8Array(file.buffer)]), file.originalname);
+    const uploadResp = await fetch(`https://${server}/v1/upload`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token}` },
+      body: form,
+    });
+    if (!uploadResp.ok) throw new Error(`iLoveAPI upload failed: ${uploadResp.status}`);
+    const { server_filename } = (await uploadResp.json()) as any;
+    uploadedFiles.push({ server_filename, filename: file.originalname });
+  }
+
+  const processResp = await fetch(`https://${server}/v1/process`, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ task, tool, files: uploadedFiles, ...extraParams }),
+  });
+  if (!processResp.ok) {
+    const body = await processResp.text();
+    if (processResp.status === 400 && body.includes('WrongPassword')) {
+      const err: any = new Error('password_required');
+      err.isPasswordRequired = true;
+      throw err;
+    }
+    throw new Error(`iLoveAPI process failed for "${tool}": ${processResp.status} ${body}`);
+  }
+
+  const downloadResp = await fetch(`https://${server}/v1/download/${task}`, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  if (!downloadResp.ok) throw new Error(`iLoveAPI download failed: ${downloadResp.status}`);
+  const buffer = Buffer.from(await downloadResp.arrayBuffer());
+  const contentDisposition = downloadResp.headers.get('content-disposition') || '';
+  const filenameMatch = contentDisposition.match(/filename="?([^"]+)"?/);
+  return { buffer, filename: filenameMatch?.[1] || `output_${tool}` };
+}
+
+// Helper to execute and format response for PDF Tool endpoints
+async function handlePdfToolExecution(
+  tool: string,
+  req: Request,
+  res: Response,
+  extraParams: Record<string, any> = {},
+  defaultContentType = 'application/pdf'
+): Promise<void> {
+  const files = req.files as Express.Multer.File[];
+  if (!files || !Array.isArray(files) || files.length === 0) {
+    res.status(400).json({
+      error: 'Missing required files: "files" field in multipart/form-data is required',
+    });
+    return;
+  }
+
+  try {
+    const result = await runIloveApiTask(tool, files, extraParams);
+
+    let contentType = defaultContentType;
+    const lowerFilename = result.filename.toLowerCase();
+    if (lowerFilename.endsWith('.zip')) {
+      contentType = 'application/zip';
+    } else if (lowerFilename.endsWith('.jpg') || lowerFilename.endsWith('.jpeg')) {
+      contentType = 'image/jpeg';
+    } else if (lowerFilename.endsWith('.md')) {
+      contentType = 'text/markdown; charset=utf-8';
+    } else if (lowerFilename.endsWith('.txt')) {
+      contentType = 'text/plain; charset=utf-8';
+    } else if (lowerFilename.endsWith('.json')) {
+      contentType = 'application/json';
+    }
+
+    res.setHeader('Content-Type', contentType);
+    res.setHeader('X-Output-Filename', result.filename);
+    res.setHeader('Content-Disposition', `attachment; filename="${result.filename}"`);
+    res.status(200).send(result.buffer);
+  } catch (err: any) {
+    if (err.isPasswordRequired || err.message === 'password_required') {
+      res.status(409).json({ error: 'password_required' });
+      return;
+    }
+    console.error(`[Yemini PDF Tools] Tool "${tool}" failed:`, err);
+    res.status(502).json({
+      error: 'pdf_tool_failed',
+      tool,
+      detail: err.message || 'Unknown error during PDF tool execution',
+    });
+  }
 }
 
 // ============================================================================
@@ -614,5 +762,144 @@ router.post(
     });
   }
 );
+
+// ============================================================================
+// PDF Tools Endpoints (/api/yemini/pdf/...)
+// ============================================================================
+
+// 1. Merge PDFs: tool: 'merge', file order = merge order
+router.post('/pdf/merge', upload.array('files'), async (req: Request, res: Response): Promise<void> => {
+  await handlePdfToolExecution('merge', req, res, {});
+});
+
+// 2. Split PDF: tool: 'split'
+router.post('/pdf/split', upload.array('files'), async (req: Request, res: Response): Promise<void> => {
+  const extraParams: Record<string, any> = {};
+  if (req.body.split_mode) extraParams.split_mode = req.body.split_mode;
+  if (req.body.ranges) extraParams.ranges = req.body.ranges;
+  await handlePdfToolExecution('split', req, res, extraParams);
+});
+
+// 3. Compress PDF: tool: 'compress'
+router.post('/pdf/compress', upload.array('files'), async (req: Request, res: Response): Promise<void> => {
+  const extraParams = {
+    compression_level: req.body.compression_level ?? 'recommended',
+  };
+  await handlePdfToolExecution('compress', req, res, extraParams);
+});
+
+// 4. Repair PDF: tool: 'repair'
+router.post('/pdf/repair', upload.array('files'), async (req: Request, res: Response): Promise<void> => {
+  await handlePdfToolExecution('repair', req, res, {});
+});
+
+// 5. Rotate PDF: tool: 'rotate'
+router.post('/pdf/rotate', upload.array('files'), async (req: Request, res: Response): Promise<void> => {
+  const extraParams: Record<string, any> = {};
+  if (req.body.rotate !== undefined) {
+    extraParams.rotate = Number(req.body.rotate);
+  }
+  await handlePdfToolExecution('rotate', req, res, extraParams);
+});
+
+// 6. Unlock PDF: tool: 'unlock'
+router.post('/pdf/unlock', upload.array('files'), async (req: Request, res: Response): Promise<void> => {
+  const extraParams: Record<string, any> = {};
+  if (req.body.password) {
+    extraParams.password = req.body.password;
+  }
+  await handlePdfToolExecution('unlock', req, res, extraParams);
+});
+
+// 7. Protect PDF: tool: 'protect' (password required)
+router.post('/pdf/protect', upload.array('files'), async (req: Request, res: Response): Promise<void> => {
+  if (!req.body.password || typeof req.body.password !== 'string' || req.body.password.trim() === '') {
+    res.status(400).json({ error: 'password is required for protect tool' });
+    return;
+  }
+  const extraParams = { password: req.body.password };
+  await handlePdfToolExecution('protect', req, res, extraParams);
+});
+
+// 8. Convert to PDF/A: tool: 'pdfa'
+router.post('/pdf/to-pdfa', upload.array('files'), async (req: Request, res: Response): Promise<void> => {
+  const extraParams = {
+    conformance: req.body.conformance ?? 'pdfa-2b',
+  };
+  await handlePdfToolExecution('pdfa', req, res, extraParams);
+});
+
+// 9. Validate PDF/A: tool: 'validatepdfa'
+router.post('/pdf/validate-pdfa', upload.array('files'), async (req: Request, res: Response): Promise<void> => {
+  const extraParams = {
+    conformance: req.body.conformance ?? 'pdfa-2b',
+  };
+  await handlePdfToolExecution('validatepdfa', req, res, extraParams);
+});
+
+// 10. OCR PDF: tool: 'pdfocr'
+router.post('/pdf/ocr', upload.array('files'), async (req: Request, res: Response): Promise<void> => {
+  let ocrLanguages = ['eng'];
+  if (req.body.ocr_languages) {
+    try {
+      ocrLanguages = typeof req.body.ocr_languages === 'string'
+        ? JSON.parse(req.body.ocr_languages)
+        : req.body.ocr_languages;
+    } catch {
+      ocrLanguages = [String(req.body.ocr_languages)];
+    }
+  }
+  const extraParams = { ocr_languages: ocrLanguages };
+  await handlePdfToolExecution('pdfocr', req, res, extraParams);
+});
+
+// 11. PDF to JPG: tool: 'pdfjpg'
+router.post('/pdf/to-jpg', upload.array('files'), async (req: Request, res: Response): Promise<void> => {
+  const extraParams = {
+    pdfjpg_mode: req.body.pdfjpg_mode ?? 'pages',
+  };
+  await handlePdfToolExecution('pdfjpg', req, res, extraParams, 'image/jpeg');
+});
+
+// 12. Page Numbers: tool: 'pagenumber'
+router.post('/pdf/page-numbers', upload.array('files'), async (req: Request, res: Response): Promise<void> => {
+  const extraParams: Record<string, any> = {};
+  if (req.body.vertical_position) extraParams.vertical_position = req.body.vertical_position;
+  if (req.body.horizontal_position) extraParams.horizontal_position = req.body.horizontal_position;
+  if (req.body.starting_number !== undefined) extraParams.starting_number = Number(req.body.starting_number);
+  await handlePdfToolExecution('pagenumber', req, res, extraParams);
+});
+
+// 13. Watermark PDF: tool: 'watermark'
+router.post('/pdf/watermark', upload.array('files'), async (req: Request, res: Response): Promise<void> => {
+  const extraParams: Record<string, any> = {
+    mode: 'text',
+    text: req.body.text ?? 'CONFIDENTIAL',
+  };
+  if (req.body.vertical_position) extraParams.vertical_position = req.body.vertical_position;
+  if (req.body.horizontal_position) extraParams.horizontal_position = req.body.horizontal_position;
+  if (req.body.transparency !== undefined) extraParams.transparency = Number(req.body.transparency);
+  await handlePdfToolExecution('watermark', req, res, extraParams);
+});
+
+// 14. Extract Text: tool: 'extract'
+router.post('/pdf/extract-text', upload.array('files'), async (req: Request, res: Response): Promise<void> => {
+  const extraParams = { detailed: true };
+  await handlePdfToolExecution('extract', req, res, extraParams, 'text/plain; charset=utf-8');
+});
+
+// 15. PDF to Markdown: tool: 'pdfmarkdown'
+router.post('/pdf/to-markdown', upload.array('files'), async (req: Request, res: Response): Promise<void> => {
+  await handlePdfToolExecution('pdfmarkdown', req, res, {}, 'text/markdown; charset=utf-8');
+});
+
+// 16. Summarize PDF: tool: 'summarize'
+router.post('/pdf/summarize', upload.array('files'), async (req: Request, res: Response): Promise<void> => {
+  const extraParams = {
+    language: req.body.language ?? 'en',
+    output_format: req.body.output_format ?? 'pdf',
+  };
+  await handlePdfToolExecution('summarize', req, res, extraParams);
+});
 
 export default router;
