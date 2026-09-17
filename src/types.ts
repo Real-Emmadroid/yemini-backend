@@ -88,6 +88,19 @@ export interface ExtensionInstallPayload {
   extension_name?: string;
 }
 
+export interface ExtensionIcon {
+  extension_id: string;
+  icon_url: string;
+  updated_at?: string;
+}
+
+export interface ExtensionIconsResponse {
+  success: boolean;
+  storage: string;
+  count: number;
+  icons: ExtensionIcon[];
+}
+
 export interface AdminDashboardData {
   success: boolean;
   storage: 'neon_postgres' | 'memory_fallback';

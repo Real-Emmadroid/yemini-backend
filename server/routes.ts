@@ -757,6 +757,40 @@ router.get('/devices', async (req: Request, res: Response, next: NextFunction): 
   }
 });
 
+// GET /api/extensions/icons (Query extension icons table)
+router.get('/extensions/icons', async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+  try {
+    if (getPool()) {
+      try {
+        const iconsQuery = `
+          SELECT extension_id, icon_url, updated_at
+          FROM extension_icons
+          ORDER BY updated_at DESC;
+        `;
+        const result = await query(iconsQuery);
+        res.status(200).json({
+          success: true,
+          storage: 'neon_postgres',
+          count: result.rowCount,
+          icons: result.rows,
+        });
+        return;
+      } catch (dbErr: any) {
+        console.warn('extension_icons query failed:', dbErr.message);
+      }
+    }
+
+    res.status(200).json({
+      success: true,
+      storage: 'unavailable',
+      count: 0,
+      icons: [],
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
 // ==========================================
 // Projects Routes (PROTECTED by JWT authenticateToken)
 // ==========================================

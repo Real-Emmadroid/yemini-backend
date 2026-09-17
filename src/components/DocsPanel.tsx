@@ -261,6 +261,20 @@ PORT="3000"`;
             Device registration and JWT user-device linking.
           </p>
         </div>
+
+        {/* GET /api/extensions/icons */}
+        <div className="p-3.5 border border-slate-200 rounded text-xs space-y-1.5 bg-slate-50/50">
+          <div className="flex items-center gap-2">
+            <span className="px-1.5 py-0.5 rounded text-[10px] font-mono font-bold bg-emerald-100 text-emerald-800">
+              GET
+            </span>
+            <code className="font-mono font-bold text-slate-900">/api/extensions/icons</code>
+            <span className="text-[10px] px-1.5 py-0.2 rounded bg-emerald-100 text-emerald-800 font-medium">Public</span>
+          </div>
+          <p className="text-slate-600">
+            Returns all extension icons from <code className="font-mono text-slate-800">extension_icons</code> (extension_id, icon_url, updated_at).
+          </p>
+        </div>
       </div>
 
       {/* Render Environment Setup */}

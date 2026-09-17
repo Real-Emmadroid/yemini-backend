@@ -137,13 +137,20 @@ export async function initDatabase(): Promise<{ success: boolean; error?: string
           created_at TIMESTAMPTZ DEFAULT now()
       );
       CREATE INDEX IF NOT EXISTS idx_ext_events_extension_id ON extension_install_events(extension_id);
+
+      -- Extension icons table
+      CREATE TABLE IF NOT EXISTS extension_icons (
+          extension_id TEXT PRIMARY KEY,
+          icon_url TEXT NOT NULL,
+          updated_at TIMESTAMPTZ DEFAULT now()
+      );
     `;
 
     const client = await dbPool.connect();
     try {
       await client.query(createTablesQuery);
       isInitialized = true;
-      console.log('✅ PostgreSQL: "users", "device_registrations", "projects", "language_events", and "extension_install_events" tables verified/created successfully.');
+      console.log('✅ PostgreSQL: "users", "device_registrations", "projects", "language_events", "extension_install_events", and "extension_icons" tables verified/created successfully.');
       return { success: true };
     } finally {
       client.release();
