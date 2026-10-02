@@ -7,7 +7,7 @@ const router = Router();
 // Rate limiting scoped strictly to the Yemini router
 const yeminiRateLimiter = rateLimit({
   windowMs: 15 * 60 * 1000, // 15 minutes
-  max: 30, // 30 requests per IP per window across all Yemini routes
+  max: 120, // 120 requests per IP per window across all Yemini routes
   standardHeaders: true,
   legacyHeaders: false,
   message: { error: 'rate_limited', detail: 'Too many requests. Please try again later.' },
@@ -48,30 +48,94 @@ interface ProviderError {
 const delay = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
 // ============================================================================
-// 1. iLoveAPI Provider (iLovePDF REST API v1) - PDF to DOCX
+// iLoveAPI Key Pool & Failover Management
 // ============================================================================
-async function convertWithILoveApi(fileBuffer: Buffer, fileName: string): Promise<Buffer> {
-  const secretKey = process.env.ILOVEPDF_SECRET_KEY;
-  if (!secretKey || secretKey.trim() === '') {
-    throw new Error('ILOVEPDF_SECRET_KEY is not configured in environment variables');
+
+// Key picker state
+let nextKeyIndex = 0;
+const cooldownUntil = new Map<number, number>();
+
+// Retrieve configured keys without logging or exposing key values
+function getIloveApiKeys(): string[] {
+  const keysEnv = process.env.ILOVEPDF_KEYS;
+  let keys: string[] = [];
+  if (keysEnv && typeof keysEnv === 'string') {
+    keys = keysEnv
+      .split(',')
+      .map((k) => k.trim())
+      .filter((k) => k.length > 0);
+  }
+  if (keys.length === 0 && process.env.ILOVEPDF_SECRET_KEY) {
+    const singleKey = process.env.ILOVEPDF_SECRET_KEY.trim();
+    if (singleKey.length > 0) {
+      keys = [singleKey];
+    }
+  }
+  if (keys.length === 0) {
+    throw new Error('No iLoveAPI keys configured');
+  }
+  return keys;
+}
+
+// Return key indexes starting round-robin from nextKeyIndex, moving cooling-down keys to the end
+function getKeyOrder(): number[] {
+  const keys = getIloveApiKeys();
+  const n = keys.length;
+  if (n === 0) return [];
+
+  const startIndex = Math.abs(nextKeyIndex) % n;
+  nextKeyIndex = (nextKeyIndex + 1) % n;
+
+  const order: number[] = [];
+  for (let i = 0; i < n; i++) {
+    order.push((startIndex + i) % n);
   }
 
+  const now = Date.now();
+  const active: number[] = [];
+  const coolingDown: number[] = [];
+
+  for (const idx of order) {
+    const cooldownExpiry = cooldownUntil.get(idx);
+    if (cooldownExpiry && cooldownExpiry > now) {
+      coolingDown.push(idx);
+    } else {
+      active.push(idx);
+    }
+  }
+
+  return [...active, ...coolingDown];
+}
+
+// ============================================================================
+// 1. iLoveAPI Provider (iLovePDF REST API v1) - PDF to DOCX
+// ============================================================================
+
+async function convertSingleKeyWithILoveApi(
+  fileBuffer: Buffer,
+  fileName: string,
+  apiKey: string
+): Promise<Buffer> {
   // Step 1: Authenticate with public_key
   const authRes = await fetch('https://api.ilovepdf.com/v1/auth', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ public_key: secretKey.trim() }),
+    body: JSON.stringify({ public_key: apiKey }),
   });
 
   if (!authRes.ok) {
     const errText = await authRes.text();
-    throw new Error(`iLoveAPI Auth failed (HTTP ${authRes.status}): ${errText}`);
+    const err: any = new Error(`iLoveAPI Auth failed (HTTP ${authRes.status}): ${errText}`);
+    err.status = authRes.status;
+    throw err;
   }
 
   const authData: any = await authRes.json();
   const token = authData?.token;
   if (!token) {
-    throw new Error('iLoveAPI Auth succeeded but no JWT token returned');
+    const err: any = new Error('iLoveAPI Auth succeeded but no JWT token returned');
+    err.status = 500;
+    throw err;
   }
 
   // Step 2: Start task (try pdfoffice tool for PDF to Word/DOCX)
@@ -92,13 +156,17 @@ async function convertWithILoveApi(fileBuffer: Buffer, fileName: string): Promis
 
   if (!startRes.ok) {
     const errText = await startRes.text();
-    throw new Error(`iLoveAPI Start task failed (HTTP ${startRes.status}): ${errText}`);
+    const err: any = new Error(`iLoveAPI Start task failed (HTTP ${startRes.status}): ${errText}`);
+    err.status = startRes.status;
+    throw err;
   }
 
   const startData: any = await startRes.json();
   const { server, task } = startData;
   if (!server || !task) {
-    throw new Error(`iLoveAPI Invalid start response: missing server (${server}) or task (${task})`);
+    const err: any = new Error(`iLoveAPI Invalid start response: missing server (${server}) or task (${task})`);
+    err.status = 500;
+    throw err;
   }
 
   // Step 3: Upload file
@@ -117,16 +185,20 @@ async function convertWithILoveApi(fileBuffer: Buffer, fileName: string): Promis
 
   if (!uploadRes.ok) {
     const errText = await uploadRes.text();
-    throw new Error(`iLoveAPI Upload failed (HTTP ${uploadRes.status}): ${errText}`);
+    const err: any = new Error(`iLoveAPI Upload failed (HTTP ${uploadRes.status}): ${errText}`);
+    err.status = uploadRes.status;
+    throw err;
   }
 
   const uploadData: any = await uploadRes.json();
   const serverFilename = uploadData?.server_filename;
   if (!serverFilename) {
-    throw new Error('iLoveAPI Upload succeeded but no server_filename returned');
+    const err: any = new Error('iLoveAPI Upload succeeded but server_filename is missing');
+    err.status = 500;
+    throw err;
   }
 
-  // Step 4: Process task
+  // Step 4: Process conversion
   const processRes = await fetch(`https://${server}/v1/process`, {
     method: 'POST',
     headers: {
@@ -147,7 +219,9 @@ async function convertWithILoveApi(fileBuffer: Buffer, fileName: string): Promis
 
   if (!processRes.ok) {
     const errText = await processRes.text();
-    throw new Error(`iLoveAPI Process failed (HTTP ${processRes.status}): ${errText}`);
+    const err: any = new Error(`iLoveAPI Process failed (HTTP ${processRes.status}): ${errText}`);
+    err.status = processRes.status;
+    throw err;
   }
 
   // Step 5: Download converted file
@@ -158,39 +232,85 @@ async function convertWithILoveApi(fileBuffer: Buffer, fileName: string): Promis
 
   if (!downloadRes.ok) {
     const errText = await downloadRes.text();
-    throw new Error(`iLoveAPI Download failed (HTTP ${downloadRes.status}): ${errText}`);
+    const err: any = new Error(`iLoveAPI Download failed (HTTP ${downloadRes.status}): ${errText}`);
+    err.status = downloadRes.status;
+    throw err;
   }
 
   const arrayBuffer = await downloadRes.arrayBuffer();
   return Buffer.from(arrayBuffer);
 }
 
+// Convert PDF to DOCX with multi-key failover
+async function convertWithILoveApi(fileBuffer: Buffer, fileName: string): Promise<Buffer> {
+  const keys = getIloveApiKeys();
+  const keyOrder = getKeyOrder();
+  let lastError: any = null;
+
+  for (const keyIndex of keyOrder) {
+    const apiKey = keys[keyIndex];
+    try {
+      return await convertSingleKeyWithILoveApi(fileBuffer, fileName, apiKey);
+    } catch (err: any) {
+      lastError = err;
+      if (err.isPasswordRequired || [400, 404, 409, 413, 422].includes(err.status)) {
+        throw err;
+      }
+
+      const statusText = err.status ? String(err.status) : (err.message || 'error');
+      if ([401, 402, 403, 429].includes(err.status)) {
+        cooldownUntil.set(keyIndex, Date.now() + 60 * 60 * 1000); // 60 minutes
+        console.warn(`[Yemini] iLoveAPI key #${keyIndex + 1} failed (${err.status}), trying next`);
+        continue;
+      }
+
+      // Any other error (5xx, network, etc.)
+      cooldownUntil.set(keyIndex, Date.now() + 60 * 1000); // 1 minute
+      console.warn(`[Yemini] iLoveAPI key #${keyIndex + 1} failed (${statusText}), trying next`);
+      continue;
+    }
+  }
+
+  throw lastError || new Error('All iLoveAPI keys failed');
+}
+
 // ============================================================================
-// Shared iLoveAPI Task Runner for PDF Tools (Merge, Split, Compress, etc.)
+// Shared iLoveAPI Task Runner for PDF Tools and Image Tools
 // ============================================================================
+
+// iLovePDF and iLoveIMG share account keys and the same auth/start/upload/process/download flow;
+// only the API host differs.
+type IloveApiHost = 'ilovepdf' | 'iloveimg';
+
 async function runIloveApiTask(
   tool: string,
   files: Express.Multer.File[],
-  extraParams: Record<string, any> = {}
+  extraParams: Record<string, any> = {},
+  host: IloveApiHost = 'ilovepdf',
+  apiKey: string
 ): Promise<{ buffer: Buffer; filename: string }> {
-  const secretKey = process.env.ILOVEPDF_SECRET_KEY;
-  if (!secretKey || secretKey.trim() === '') {
-    throw new Error('ILOVEPDF_SECRET_KEY is not configured in environment variables');
-  }
+  const apiBase = `https://api.${host}.com/v1`;
 
-  const authResp = await fetch('https://api.ilovepdf.com/v1/auth', {
+  const authResp = await fetch(`${apiBase}/auth`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ public_key: secretKey.trim() }),
+    body: JSON.stringify({ public_key: apiKey }),
   });
-  if (!authResp.ok) throw new Error(`iLoveAPI auth failed: ${authResp.status}`);
+  if (!authResp.ok) {
+    const err: any = new Error(`iLoveAPI auth failed: ${authResp.status}`);
+    err.status = authResp.status;
+    throw err;
+  }
   const { token } = (await authResp.json()) as any;
 
-  const startResp = await fetch(`https://api.ilovepdf.com/v1/start/${tool}`, {
+  const startResp = await fetch(`${apiBase}/start/${tool}`, {
     headers: { Authorization: `Bearer ${token}` },
   });
   if (!startResp.ok) {
-    throw new Error(`iLoveAPI start failed for tool "${tool}": ${startResp.status} ${await startResp.text()}`);
+    const errText = await startResp.text();
+    const err: any = new Error(`iLoveAPI start failed for tool "${tool}": ${startResp.status} ${errText}`);
+    err.status = startResp.status;
+    throw err;
   }
   const { server, task } = (await startResp.json()) as any;
 
@@ -204,7 +324,11 @@ async function runIloveApiTask(
       headers: { Authorization: `Bearer ${token}` },
       body: form,
     });
-    if (!uploadResp.ok) throw new Error(`iLoveAPI upload failed: ${uploadResp.status}`);
+    if (!uploadResp.ok) {
+      const err: any = new Error(`iLoveAPI upload failed: ${uploadResp.status}`);
+      err.status = uploadResp.status;
+      throw err;
+    }
     const { server_filename } = (await uploadResp.json()) as any;
     uploadedFiles.push({ server_filename, filename: file.originalname });
   }
@@ -219,19 +343,64 @@ async function runIloveApiTask(
     if (processResp.status === 400 && body.includes('WrongPassword')) {
       const err: any = new Error('password_required');
       err.isPasswordRequired = true;
+      err.status = 400;
       throw err;
     }
-    throw new Error(`iLoveAPI process failed for "${tool}": ${processResp.status} ${body}`);
+    const err: any = new Error(`iLoveAPI process failed for "${tool}": ${processResp.status} ${body}`);
+    err.status = processResp.status;
+    throw err;
   }
 
   const downloadResp = await fetch(`https://${server}/v1/download/${task}`, {
     headers: { Authorization: `Bearer ${token}` },
   });
-  if (!downloadResp.ok) throw new Error(`iLoveAPI download failed: ${downloadResp.status}`);
+  if (!downloadResp.ok) {
+    const err: any = new Error(`iLoveAPI download failed: ${downloadResp.status}`);
+    err.status = downloadResp.status;
+    throw err;
+  }
   const buffer = Buffer.from(await downloadResp.arrayBuffer());
   const contentDisposition = downloadResp.headers.get('content-disposition') || '';
   const filenameMatch = contentDisposition.match(/filename="?([^"]+)"?/);
   return { buffer, filename: filenameMatch?.[1] || `output_${tool}` };
+}
+
+// Multi-key failover wrapper for PDF and Image tools
+async function runWithKeyFailover(
+  tool: string,
+  files: Express.Multer.File[],
+  extraParams: Record<string, any> = {},
+  host: IloveApiHost = 'ilovepdf'
+): Promise<{ buffer: Buffer; filename: string }> {
+  const keys = getIloveApiKeys();
+  const keyOrder = getKeyOrder();
+  let lastError: any = null;
+
+  for (const keyIndex of keyOrder) {
+    const apiKey = keys[keyIndex];
+    try {
+      return await runIloveApiTask(tool, files, extraParams, host, apiKey);
+    } catch (err: any) {
+      lastError = err;
+      if (err.isPasswordRequired || [400, 404, 409, 413, 422].includes(err.status)) {
+        throw err;
+      }
+
+      const statusText = err.status ? String(err.status) : (err.message || 'error');
+      if ([401, 402, 403, 429].includes(err.status)) {
+        cooldownUntil.set(keyIndex, Date.now() + 60 * 60 * 1000); // 60 minutes
+        console.warn(`[Yemini] iLoveAPI key #${keyIndex + 1} failed (${err.status}), trying next`);
+        continue;
+      }
+
+      // Any other error (5xx, network, etc.)
+      cooldownUntil.set(keyIndex, Date.now() + 60 * 1000); // 1 minute
+      console.warn(`[Yemini] iLoveAPI key #${keyIndex + 1} failed (${statusText}), trying next`);
+      continue;
+    }
+  }
+
+  throw lastError || new Error('All iLoveAPI keys failed');
 }
 
 // Helper to execute and format response for PDF Tool endpoints
@@ -240,7 +409,8 @@ async function handlePdfToolExecution(
   req: Request,
   res: Response,
   extraParams: Record<string, any> = {},
-  defaultContentType = 'application/pdf'
+  defaultContentType = 'application/pdf',
+  host: IloveApiHost = 'ilovepdf'
 ): Promise<void> {
   const files = req.files as Express.Multer.File[];
   if (!files || !Array.isArray(files) || files.length === 0) {
@@ -251,7 +421,7 @@ async function handlePdfToolExecution(
   }
 
   try {
-    const result = await runIloveApiTask(tool, files, extraParams);
+    const result = await runWithKeyFailover(tool, files, extraParams, host);
 
     let contentType = defaultContentType;
     const lowerFilename = result.filename.toLowerCase();
@@ -259,6 +429,12 @@ async function handlePdfToolExecution(
       contentType = 'application/zip';
     } else if (lowerFilename.endsWith('.jpg') || lowerFilename.endsWith('.jpeg')) {
       contentType = 'image/jpeg';
+    } else if (lowerFilename.endsWith('.png')) {
+      contentType = 'image/png';
+    } else if (lowerFilename.endsWith('.webp')) {
+      contentType = 'image/webp';
+    } else if (lowerFilename.endsWith('.gif')) {
+      contentType = 'image/gif';
     } else if (lowerFilename.endsWith('.md')) {
       contentType = 'text/markdown; charset=utf-8';
     } else if (lowerFilename.endsWith('.txt')) {
@@ -628,12 +804,20 @@ async function convertWithAdobe(fileBuffer: Buffer, fileName: string): Promise<B
 
 // GET /api/yemini/health (Diagnostic endpoint)
 router.get('/health', (req: Request, res: Response): void => {
+  let keysCount = 0;
+  let coolingCount = 0;
+  try {
+    const keys = getIloveApiKeys();
+    keysCount = keys.length;
+    const now = Date.now();
+    coolingCount = Array.from(cooldownUntil.values()).filter((expiry) => expiry > now).length;
+  } catch {
+    keysCount = 0;
+    coolingCount = 0;
+  }
+
   const providers = {
-    iloveapi: Boolean(
-      process.env.ILOVEPDF_SECRET_KEY &&
-      process.env.ILOVEPDF_SECRET_KEY.trim() !== '' &&
-      !process.env.ILOVEPDF_SECRET_KEY.includes('your_')
-    ),
+    iloveapi: keysCount > 0,
     nutrient: Boolean(
       process.env.NUTRIENT_API_KEY &&
       process.env.NUTRIENT_API_KEY.trim() !== '' &&
@@ -661,6 +845,10 @@ router.get('/health', (req: Request, res: Response): void => {
     timestamp: new Date().toISOString(),
     configured_providers_count: configuredCount,
     providers,
+    ilovepdf: {
+      keysConfigured: keysCount,
+      keysCoolingDown: coolingCount,
+    },
     fallback_order: ['iloveapi', 'cloudconvert', 'adobe', 'nutrient'],
   });
 });
@@ -684,7 +872,7 @@ router.post(
 
     console.log(`[Yemini Converter] Received conversion request for: ${originalName} (${file.size} bytes)`);
 
-    // Chain 1: iLoveAPI
+    // Chain 1: iLoveAPI (with multi-key failover)
     try {
       console.log('[Yemini Converter] [1/4] Trying iLoveAPI...');
       const docxBuffer = await convertWithILoveApi(file.buffer, originalName);
@@ -871,14 +1059,25 @@ router.post('/pdf/page-numbers', upload.array('files'), async (req: Request, res
 });
 
 // 13. Watermark PDF: tool: 'watermark'
+//
+// The app's "transparency" is how see-through the stamp is (0 = solid, 100 = invisible).
+// iLoveAPI's `transparency` is the opposite: 100 = fully opaque (default), so it is inverted here.
+// iLoveAPI only positions on a 3x3 grid (vertical top/middle/bottom, horizontal left/center/right).
 router.post('/pdf/watermark', upload.array('files'), async (req: Request, res: Response): Promise<void> => {
   const extraParams: Record<string, any> = {
     mode: 'text',
     text: req.body.text ?? 'CONFIDENTIAL',
   };
-  if (req.body.vertical_position) extraParams.vertical_position = req.body.vertical_position;
-  if (req.body.horizontal_position) extraParams.horizontal_position = req.body.horizontal_position;
-  if (req.body.transparency !== undefined) extraParams.transparency = Number(req.body.transparency);
+  if (['top', 'middle', 'bottom'].includes(req.body.vertical_position)) {
+    extraParams.vertical_position = req.body.vertical_position;
+  }
+  if (['left', 'center', 'right'].includes(req.body.horizontal_position)) {
+    extraParams.horizontal_position = req.body.horizontal_position;
+  }
+  if (req.body.transparency !== undefined) {
+    const seeThrough = Math.max(0, Math.min(100, Number(req.body.transparency) || 0));
+    extraParams.transparency = 100 - seeThrough;
+  }
   await handlePdfToolExecution('watermark', req, res, extraParams);
 });
 
@@ -900,6 +1099,58 @@ router.post('/pdf/summarize', upload.array('files'), async (req: Request, res: R
     output_format: req.body.output_format ?? 'pdf',
   };
   await handlePdfToolExecution('summarize', req, res, extraParams);
+});
+
+// ============================================================================
+// Image Tools Endpoints (/api/yemini/img/...)
+// ============================================================================
+
+// 1. Remove Background: tool: 'removebackgroundimage', host: 'iloveimg'
+router.post('/img/remove-background', upload.array('files'), async (req: Request, res: Response): Promise<void> => {
+  await handlePdfToolExecution('removebackgroundimage', req, res, {}, 'image/jpeg', 'iloveimg');
+});
+
+// 2. Resize Image: tool: 'resizeimage', host: 'iloveimg'
+router.post('/img/resize', upload.array('files'), async (req: Request, res: Response): Promise<void> => {
+  const extraParams: Record<string, any> = {};
+
+  const resizeMode = req.body.resize_mode ?? (req.body.percentage ? 'percent' : 'pixels');
+  extraParams.resize_mode = resizeMode === 'percentage' ? 'percent' : resizeMode;
+
+  if (extraParams.resize_mode === 'percent') {
+    if (req.body.percentage !== undefined) {
+      extraParams.percentage = Number(req.body.percentage);
+    }
+  } else {
+    if (req.body.pixels_width !== undefined || req.body.width !== undefined) {
+      extraParams.pixels_width = Number(req.body.pixels_width ?? req.body.width);
+    }
+    if (req.body.pixels_height !== undefined || req.body.height !== undefined) {
+      extraParams.pixels_height = Number(req.body.pixels_height ?? req.body.height);
+    }
+    if (req.body.maintain_ratio !== undefined) {
+      extraParams.maintain_ratio = req.body.maintain_ratio === true || req.body.maintain_ratio === 'true';
+    }
+    if (req.body.no_enlarge !== undefined) {
+      extraParams.no_enlarge = req.body.no_enlarge === true || req.body.no_enlarge === 'true';
+    }
+  }
+
+  await handlePdfToolExecution('resizeimage', req, res, extraParams, 'image/jpeg', 'iloveimg');
+});
+
+// Enhance (AI upscale): tool: 'upscaleimage', multiplier 2 or 4
+router.post('/img/upscale', upload.array('files'), async (req: Request, res: Response): Promise<void> => {
+  const extraParams = { multiplier: Number(req.body.multiplier) === 4 ? 4 : 2 };
+  await handlePdfToolExecution('upscaleimage', req, res, extraParams, 'image/jpeg', 'iloveimg');
+});
+
+// Compress: tool: 'compressimage'
+router.post('/img/compress', upload.array('files'), async (req: Request, res: Response): Promise<void> => {
+  const level = ['low', 'recommended', 'extreme'].includes(req.body.compression_level)
+    ? req.body.compression_level
+    : 'recommended';
+  await handlePdfToolExecution('compressimage', req, res, { compression_level: level }, 'image/jpeg', 'iloveimg');
 });
 
 export default router;
